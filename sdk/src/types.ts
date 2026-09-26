@@ -45,6 +45,19 @@ export interface Agent {
  * The string values match the Rust enum variant names emitted by
  * `scValToNative` so we can round-trip without a manual mapping table.
  *
+ * The numeric index of each variant matches the Rust enum declaration in
+ * `agentic-commerce/src/lib.rs`:
+ *
+ * | Index | Variant   |
+ * | ----- | --------- |
+ * | 0     | Open      |
+ * | 1     | Funded    |
+ * | 2     | Submitted |
+ * | 3     | Completed |
+ * | 4     | Rejected  |
+ * | 5     | Cancelled |
+ * | 6     | Disputed  |
+ *
  * NOTE: `Open` is reserved for a future "unfunded intent" flow — the current
  * contract transitions straight from pre-creation to `Funded` during
  * `create_job` because the escrow transfer happens atomically. We keep the
