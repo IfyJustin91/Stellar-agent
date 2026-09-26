@@ -74,7 +74,7 @@ Phase 0 (scaffold)
 
 ## Cut list (if we fall behind, in order)
 
-1. Dark mode toggle (never started)
+1. Orange particle background animation
 2. How-it-works section on landing
 3. `docs/PROTOCOL.md` (reference only — lightpaper is enough)
 4. `cancel` entry point + its test (only if literally cannot compile)

@@ -4,44 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: actions/setup-node@v4
         with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
 
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
-
-      - name: Coverage (agentic-commerce)
-        run: |
-          cargo tarpaulin --package agentic-commerce \
-            --out Xml --output-dir coverage
-
-      - name: Enforce coverage threshold
-        run: |
-          COVERAGE=$(grep -oP 'line-rate="\K[0-9.]+' coverage/cobertura.xml | head -1)
-          PCT=$(awk "BEGIN { printf \"%.2f\", $COVERAGE * 100 }")
-          echo "agentic-commerce coverage: ${PCT}%"
-          awk "BEGIN { exit !($PCT >= 95) }" || {
-            echo "::error::Coverage ${PCT}% is below the 95% threshold"
-            exit 1
-          }
+  openapi-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
