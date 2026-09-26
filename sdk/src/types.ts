@@ -161,6 +161,16 @@ export interface MarcConfig {
   commerceContract: Address;
   /** Token SAC address for job budgets (e.g., USDC on testnet). */
   usdcToken: Address;
+  /**
+   * Maximum time (in milliseconds) to poll `getTransaction` for finality
+   * before giving up. Defaults to 60,000 ms (60 seconds).
+   *
+   * If a transaction is dropped by the network (e.g. sequence number
+   * mismatch or mempool eviction) the polling loop would otherwise never
+   * terminate; this bound guarantees `invoke()` eventually throws instead
+   * of hanging the application indefinitely.
+   */
+  pollTimeoutMs?: number;
   /** Optional callback fired after each successful on-chain transaction. */
   onTx?: (hash: string, method: string) => void;
 }
@@ -250,53 +260,6 @@ function resolveDeploymentValues(network: "testnet" | "mainnet") {
  * STELLAR_RPC_URL=http://localhost:8000/soroban/rpc
  *
  * @example
- * // .env — per-network override (takes priority over STELLAR_RPC_URL)
- * STELLAR_TESTNET_RPC_URL=http://localhost:8000/soroban/rpc
- */
-function resolveRpcUrl(network: "testnet" | "mainnet", defaultRpcUrl: string) {
-  const networkSpecific = getEnvValue(
-    network === "testnet" ? "STELLAR_TESTNET_RPC_URL" : "STELLAR_MAINNET_RPC_URL",
-  );
-  const generic = getEnvValue("STELLAR_RPC_URL");
-  return networkSpecific || generic || defaultRpcUrl;
-}
+ * // .env — per-network override (takes priority over STELL
 
-/**
- * Testnet preset configuration.
- *
- * Uses the public SDF Soroban RPC endpoint by default. Override via the
- * `STELLAR_TESTNET_RPC_URL` or `STELLAR_RPC_URL` environment variables.
- * Contract addresses are resolved from env vars or `deployments/testnet.json`,
- * falling back to the known testnet deployment.
- */
-export const TESTNET: MarcConfig = {
-  rpcUrl: resolveRpcUrl("testnet", "https://soroban-testnet.stellar.org"),
-  networkPassphrase: "Test SDF Network ; September 2015",
-  ...resolveDeploymentValues("testnet"),
-};
-
-/**
- * Mainnet preset configuration.
- *
- * Uses the public SDF Soroban RPC endpoint by default. Override via the
- * `STELLAR_MAINNET_RPC_URL` or `STELLAR_RPC_URL` environment variables.
- * Contract addresses are resolved from env vars or `deployments/mainnet.json`.
- */
-export const MAINNET: MarcConfig = {
-  rpcUrl: resolveRpcUrl("mainnet", "https://soroban-mainnet.stellar.org"),
-  networkPassphrase: "Public Global Stellar Network ; September 2015",
-  ...resolveDeploymentValues("mainnet"),
-};
-
-/**
- * Preset configurations keyed by network name.
- *
- * @example
- * ```ts
- * const cfg = PRESETS["stellar-testnet"];
- * ```
- */
-export const PRESETS: Record<PresetConfig["network"], MarcConfig> = {
-  "stellar-testnet": TESTNET,
-  "stellar-mainnet": MAINNET,
-};
+/* … truncated 6530 chars — edit only what you need near the top … */
