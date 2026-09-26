@@ -2,6 +2,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { createEd25519Signer, STELLAR_TESTNET_CAIP2, STELLAR_PUBNET_CAIP2 } from "@x402/stellar";
+import { decodeBase64 } from "./format.js";
 
 /**
  * Payment lifecycle status passed to the {@link MarcFetchOptions.onPayment} callback.
@@ -65,13 +66,17 @@ export interface ParsedPaymentRequirement {
  * console.log(req.asset);  // "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
  */
 export function parsePaymentRequiredHeader(headerValue: string): ParsedPaymentRequirement {
-  const decoded = Buffer.from(headerValue, "base64").toString("utf8");
-  const parsed = JSON.parse(decoded) as { accepts?: Array<{ amount?: string; asset?: string }> };
-  const firstAccept = parsed.accepts?.[0];
-  return {
-    amount: firstAccept?.amount ?? "",
-    asset: firstAccept?.asset ?? "",
-  };
+  try {
+    const decoded = decodeBase64(headerValue);
+    const parsed = JSON.parse(decoded) as { accepts?: Array<{ amount?: string; asset?: string }> };
+    const firstAccept = parsed.accepts?.[0];
+    return {
+      amount: firstAccept?.amount ?? "",
+      asset: firstAccept?.asset ?? "",
+    };
+  } catch {
+    return { amount: "", asset: "" };
+  }
 }
 
 /**

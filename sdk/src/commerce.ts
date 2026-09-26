@@ -1,13 +1,13 @@
 import {
   Contract,
-  Keypair,
   nativeToScVal,
   scValToNative,
   Address,
   xdr,
 } from "@stellar/stellar-sdk";
-import type { Job, JobStatus, MarcConfig } from "./types.js";
-import { JobStatusFromNumber } from "./types.js";
+import type { Job, MarcConfig } from "./types.js";
+import { JobStatusFromNumber } from "./jobStatus.js";
+import type { JobStatus } from "./jobStatus.js";
 import { BaseClient } from "./baseClient.js";
 import type { Signer } from "./signer.js";
 import { signerPublicKey } from "./signer.js";
@@ -449,6 +449,33 @@ export class CommerceClient extends BaseClient {
       nativeToScVal(jobId, { type: "u64" }),
     );
     await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async dispute(client: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "dispute",
+      new Address(signerPublicKey(client)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async claimRefund(client: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "claim_refund",
+      new Address(signerPublicKey(client)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async claimExpired(provider: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "claim_expired",
+      new Address(signerPublicKey(provider)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(provider, op, () => undefined, "commerce");
   }
 
   /**
