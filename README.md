@@ -215,8 +215,5 @@ MIT
 <!-- handsoff-issue-618 -->
 - #618: [Security] Add Content Security Policy headers configuration in dashboard/server.ts
 
-<!-- handsoff-issue-646 -->
-- #646: feat(contracts): implement on-chain agent reputation scoring system
-
-<!-- handsoff-issue-648 -->
-- #648: feat(dashboard): add real-time job feed with WebSocket live updates
+<!-- handsoff-issue-656 -->
+- #656: feat(sdk): implement Server-Sent Events streaming for long-running job results
