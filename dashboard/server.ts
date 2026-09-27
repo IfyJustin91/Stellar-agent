@@ -700,11 +700,17 @@ app.get("/api/jobs", async (req, res) => {
         limit,
         total: jobs.length,
         hasNext: offset + limit < jobs.length,
-        items: serialize(items),
+        items: serialize(await Promise.all(items.map(async (job) => ({
+          ...job,
+          evaluatorProgress: await commerce.getEvaluatorProgress(job.id).catch(() => null),
+        })))),
       });
       return;
     }
-    res.json(serialize(jobs));
+    res.json(serialize(await Promise.all(jobs.map(async (job) => ({
+      ...job,
+      evaluatorProgress: await commerce.getEvaluatorProgress(job.id).catch(() => null),
+    })))));
   } catch (err: unknown) {
     if (respondWithValidationError(err, res)) return;
     res.status(500).json({ error: (err as Error).message });
@@ -756,6 +762,25 @@ app.post(
       await commerce.submit(kp, params.id, parsed.deliverable || "ipfs://dashboard-delivery");
       invalidateJobs();
       res.json({ success: true });
+    } catch (err: unknown) {
+      handleRouteError(err, res);
+    }
+  },
+);
+
+app.post(
+  "/api/jobs/:id/approve",
+  auditAdminAction,
+  optionalAuthMiddleware,
+  requireDashboardWallet,
+  async (req, res) => {
+    try {
+      const params = numericIdParamSchema.parse(req.params);
+      const parsed = walletOnlySchema.parse(req.body);
+      const kp = getKeypair(parsed.wallet);
+      const approvals = await commerce.approveJob(kp, params.id);
+      invalidateJobs();
+      res.json({ approvals });
     } catch (err: unknown) {
       handleRouteError(err, res);
     }
@@ -976,6 +1001,28 @@ app.post(
       const parsed = buildUnsignedActionSchema.parse(req.body);
       const op = commerceContract.call(
         "complete",
+        new Address(parsed.publicKey).toScVal(),
+        nativeToScVal(BigInt(parsed.jobId), { type: "u64" }),
+      );
+      const txXdr = await buildTxXdr(parsed.publicKey, op);
+      res.json({ xdr: txXdr });
+    } catch (err: unknown) {
+      if (respondWithValidationError(err, res)) return;
+      res.status(500).json({ error: (err as Error).message });
+    }
+  },
+);
+
+app.post(
+  "/api/build/approve",
+  rateLimitMutating,
+  optionalAuthMiddleware,
+  requireDashboardWallet,
+  async (req, res) => {
+    try {
+      const parsed = buildUnsignedActionSchema.parse(req.body);
+      const op = commerceContract.call(
+        "approve_job",
         new Address(parsed.publicKey).toScVal(),
         nativeToScVal(BigInt(parsed.jobId), { type: "u64" }),
       );

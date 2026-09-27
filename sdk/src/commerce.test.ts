@@ -25,6 +25,13 @@ test("CommerceClient exposes the expected method signatures", () => {
   assert.equal(typeof client.approve, "function");
   assert.equal(typeof client.approveAndCreateJob, "function");
   assert.equal(typeof client.createJobWithApproval, "function");
+  assert.equal(typeof client.createJobMultiEval, "function");
+  assert.equal(typeof client.approveJob, "function");
+  assert.equal(typeof client.getEvaluatorProgress, "function");
+  assert.equal(typeof client.setMultiEvalThreshold, "function");
+  assert.equal(typeof client.openChannel, "function");
+  assert.equal(typeof client.closeChannel, "function");
+  assert.equal(typeof client.forceClose, "function");
   assert.equal(typeof client.getJob, "function");
   assert.equal(typeof client.feeBps, "function");
   assert.equal(typeof client.setTreasury, "function");

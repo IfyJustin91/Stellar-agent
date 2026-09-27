@@ -8,6 +8,8 @@ import {
 import type { Signer } from "./signer.js";
 import { IdentityClient } from "./identity.js";
 import { CommerceClient } from "./commerce.js";
+export { createChannelVoucher, verifyChannelVoucher } from "./paymentChannels.js";
+export type { ChannelVoucher } from "./paymentChannels.js";
 
 /**
  * Error thrown when the Freighter browser extension is not available.

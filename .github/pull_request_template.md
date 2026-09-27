@@ -18,4 +18,5 @@ Closes #
 
 - [ ] Unit tests added/updated
 - [ ] Documentation updated
+- [ ] WASM size impact reviewed (if contract code changed)
 - [ ] CI passes

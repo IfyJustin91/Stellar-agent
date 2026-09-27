@@ -1,38 +1,28 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env sh
+set -eu
 
-# Pre-commit hook: run prettier, clippy, and cargo test.
-# Some dev containers expose cargo only via rustup's shell setup, so initialize
-# the Rust environment explicitly before invoking cargo.
 for candidate in "$HOME/.cargo/env" "/usr/local/cargo/env" "/root/.cargo/env"; do
   if [ -f "$candidate" ]; then
-    # shellcheck source=/dev/null
     . "$candidate"
     break
   fi
 done
 
-if [ -d "$HOME/.cargo/bin" ] && [ -n "${PATH:-}" ]; then
+if [ -d "$HOME/.cargo/bin" ]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "cargo not found. Install Rust or ensure ~/.cargo/bin is available in PATH before running git commit."
-  exit 1
-fi
-
-echo "Checking code formatting with prettier..."
-npm run format:check || {
-  echo "Running prettier to fix formatting..."
-  npm run format
-  echo "Formatting applied. Please review and re-stage changes."
+echo "Checking Rust formatting..."
+cargo fmt --all -- --check || {
+  echo "Rust formatting failed. Run 'cargo fmt --all' and stage the formatted files."
   exit 1
 }
 
-echo "Running cargo clippy..."
-cargo clippy --all-targets --all-features -- -D warnings
+echo "Running Rust clippy..."
+cargo clippy --quiet --workspace --all-targets --all-features -- -D warnings || {
+  echo "Clippy failed. Fix the reported warnings before committing."
+  exit 1
+}
 
-echo "Running cargo test..."
-cargo test
-
-echo "✓ All checks passed"
+echo "Checking staged files..."
+npm exec -- lint-staged

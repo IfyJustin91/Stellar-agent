@@ -26,3 +26,41 @@ jobs:
         with:
           node-version: 20
       - run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
+
+  wasm-size:
+    runs-on: ubuntu-latest
+    env:
+      IDENTITY_WASM_BUDGET_BYTES: ${{ vars.IDENTITY_WASM_BUDGET_BYTES || '8192' }}
+      COMMERCE_WASM_BUDGET_BYTES: ${{ vars.COMMERCE_WASM_BUDGET_BYTES || '16384' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          targets: wasm32v1-none
+      - name: Build release WASM
+        run: cargo build --target wasm32v1-none --workspace --release
+      - name: Install Stellar CLI optimizer
+        run: cargo install stellar-cli --locked --version 25.2.0
+      - name: Optimize Soroban contracts
+        run: stellar contract build --optimize
+      - name: Check WASM binary sizes
+        shell: bash
+        run: |
+          identity="target/wasm32v1-none/release/agent_identity.wasm"
+          commerce="target/wasm32v1-none/release/agentic_commerce.wasm"
+          identity_size=$(stat -c%s "$identity")
+          commerce_size=$(stat -c%s "$commerce")
+          echo "identity=${identity_size}B (budget=${IDENTITY_WASM_BUDGET_BYTES}B)"
+          echo "commerce=${commerce_size}B (budget=${COMMERCE_WASM_BUDGET_BYTES}B)"
+          if [[ ! "$IDENTITY_WASM_BUDGET_BYTES" =~ ^[0-9]+$ || ! "$COMMERCE_WASM_BUDGET_BYTES" =~ ^[0-9]+$ ]]; then
+            echo "WASM size budgets must be non-negative integers" >&2
+            exit 1
+          fi
+          if (( identity_size > IDENTITY_WASM_BUDGET_BYTES )); then
+            echo "identity WASM exceeds its configured size budget" >&2
+            exit 1
+          fi
+          if (( commerce_size > COMMERCE_WASM_BUDGET_BYTES )); then
+            echo "commerce WASM exceeds its configured size budget" >&2
+            exit 1
+          fi
