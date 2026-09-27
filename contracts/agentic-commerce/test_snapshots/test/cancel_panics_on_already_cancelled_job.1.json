@@ -95,7 +95,7 @@
                   "i128": "100000"
                 },
                 {
-                  "string": "ipfs://job.json"
+                  "string": "job"
                 }
               ]
             }
@@ -125,7 +125,6 @@
         }
       ]
     ],
-    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
@@ -148,8 +147,6 @@
         }
       ]
     ],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -300,7 +297,7 @@
                       "symbol": "description"
                     },
                     "val": {
-                      "string": "ipfs://job.json"
+                      "string": "job"
                     }
                   },
                   {
