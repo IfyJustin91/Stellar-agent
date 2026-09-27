@@ -33,6 +33,43 @@ const { app, seller, cfg } = await createSellerAgent({
 const groq = isMockLlm() ? null : new Groq({ apiKey: process.env.GROQ_API_KEY });
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
+const startTime = Date.now();
+let jobsActive = 0;
+let jobsCompleted = 0;
+let jobsFailed = 0;
+
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "healthy",
+    agent: AGENT_ID,
+    version: "1.0.0",
+    uptime: Math.floor((Date.now() - startTime) / 1000),
+    jobs: { active: jobsActive, completed: jobsCompleted, failed: jobsFailed },
+    wallet: { address: process.env.SECRET_KEY ? "configured" : "not-configured" },
+  });
+});
+
+app.get("/metrics", (_req, res) => {
+  const uptime = Math.floor((Date.now() - startTime) / 1000);
+  res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  res.send(
+    [
+      `# HELP bear_jobs_active Number of currently active jobs`,
+      `# TYPE bear_jobs_active gauge`,
+      `bear_jobs_active ${jobsActive}`,
+      `# HELP bear_jobs_completed_total Total completed jobs`,
+      `# TYPE bear_jobs_completed_total counter`,
+      `bear_jobs_completed_total ${jobsCompleted}`,
+      `# HELP bear_jobs_failed_total Total failed jobs`,
+      `# TYPE bear_jobs_failed_total counter`,
+      `bear_jobs_failed_total ${jobsFailed}`,
+      `# HELP bear_uptime_seconds Agent uptime in seconds`,
+      `# TYPE bear_uptime_seconds gauge`,
+      `bear_uptime_seconds ${uptime}`,
+    ].join("\n") + "\n",
+  );
+});
+
 let callCount = 0;
 async function generate(prompt: string): Promise<string> {
   if (isMockLlm()) {
@@ -124,6 +161,7 @@ app.post("/job", limiter, async (req, res) => {
   );
   res.json(makeSellerResponse({ status: "accepted", jobId }, startedAt));
 
+  jobsActive++;
   try {
     console.log(`[${AGENT_ID}] Calling Groq...`);
     const brandContext = [
@@ -160,8 +198,12 @@ app.post("/job", limiter, async (req, res) => {
         await new Promise((r) => setTimeout(r, 4000));
       }
     }
+    jobsCompleted++;
   } catch (err) {
+    jobsFailed++;
     console.error(`[${AGENT_ID}] Error:`, (err as Error).message);
+  } finally {
+    jobsActive--;
   }
 });
 

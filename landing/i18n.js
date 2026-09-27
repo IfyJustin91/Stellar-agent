@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var SUPPORTED_LANGS = ["en", "es", "fr", "pt", "de", "ja"];
+  var SUPPORTED_LANGS = ["en", "es", "fr", "pt", "de", "ja", "zh-CN"];
   var DEFAULT_LANG = "en";
   var STORAGE_KEY = "bear-lang";
 
@@ -22,7 +22,12 @@
       // localStorage unavailable (private mode, disabled cookies) — fall through.
     }
     var nav = (navigator.languages && navigator.languages[0]) || navigator.language || DEFAULT_LANG;
+    // Try full tag first (e.g. "zh-CN"), then short code (e.g. "zh" → "zh-CN")
+    var fullTag = nav.replace("_", "-");
+    if (SUPPORTED_LANGS.indexOf(fullTag) !== -1) return fullTag;
     var short = nav.slice(0, 2).toLowerCase();
+    // Map bare "zh" to zh-CN as the default Chinese variant
+    if (short === "zh") return "zh-CN";
     return SUPPORTED_LANGS.indexOf(short) !== -1 ? short : DEFAULT_LANG;
   }
 
@@ -99,7 +104,7 @@
     select.className = "lang-switch";
     select.setAttribute("aria-label", "Language");
 
-    var LABELS = { en: "EN", es: "ES", fr: "FR", pt: "PT", de: "DE", ja: "JA" };
+    var LABELS = { en: "EN", es: "ES", fr: "FR", pt: "PT", de: "DE", ja: "JA", "zh-CN": "中文" };
     for (var i = 0; i < SUPPORTED_LANGS.length; i++) {
       var lang = SUPPORTED_LANGS[i];
       var option = document.createElement("option");
