@@ -18,6 +18,16 @@
 /** Matches a Stellar secret seed (starts with `S`, 56 base32 chars) anywhere in a string. */
 const SECRET_KEY_PATTERN = /S[A-Z2-7]{55}/g;
 
+export function decodeBase64(value: string): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(value, "base64").toString("utf8");
+  }
+
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
 /**
  * Redact any Stellar secret key found in a string, keeping only the first
  * and last 4 characters (e.g. `SABC...WXYZ`).

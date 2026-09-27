@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { JobStatus } from "./jobStatus.js";
+export { JobStatus, JobStatusFromNumber } from "./jobStatus.js";
 
 // Shared types for the marc-stellar SDK.
 //
