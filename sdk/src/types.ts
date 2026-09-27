@@ -42,6 +42,69 @@ export interface Agent {
 }
 
 /**
+ * Lifecycle states for a job in `agentic_commerce`.
+ *
+ * The string values match the Rust enum variant names emitted by
+ * `scValToNative` so we can round-trip without a manual mapping table.
+ *
+ * The numeric index of each variant matches the Rust enum declaration in
+ * `agentic-commerce/src/lib.rs`:
+ *
+ * | Index | Variant   |
+ * | ----- | --------- |
+ * | 0     | Open      |
+ * | 1     | Funded    |
+ * | 2     | Submitted |
+ * | 3     | Completed |
+ * | 4     | Rejected  |
+ * | 5     | Cancelled |
+ * | 6     | Disputed  |
+ *
+ * NOTE: `Open` is reserved for a future "unfunded intent" flow — the current
+ * contract transitions straight from pre-creation to `Funded` during
+ * `create_job` because the escrow transfer happens atomically. We keep the
+ * variant here so the SDK doesn't break when the contract grows.
+ */
+export enum JobStatus {
+  Open = "Open",
+  Funded = "Funded",
+  Submitted = "Submitted",
+  Completed = "Completed",
+  Rejected = "Rejected",
+  Cancelled = "Cancelled",
+  Disputed = "Disputed",
+}
+
+/**
+ * Reverse mapping from the raw numeric status returned by `getJob()` to the
+ * corresponding `JobStatus` string value.
+ *
+ * The Soroban contract stores `JobStatus` as a compact u32 enum on-chain.
+ * When `scValToNative` decodes it you get a number (0-6). Instead of writing:
+ *
+ * ```ts
+ * const label = Object.keys(JobStatus).find(k => (JobStatus as any)[k] === n);
+ * ```
+ *
+ * you can now do:
+ *
+ * ```ts
+ * const label: JobStatus = JobStatusFromNumber[n]; // e.g. JobStatus.Funded
+ * ```
+ *
+ * The index order matches the Rust enum declaration in `agentic-commerce/src/lib.rs`.
+ */
+export const JobStatusFromNumber: Record<number, JobStatus> = {
+  0: JobStatus.Open,
+  1: JobStatus.Funded,
+  2: JobStatus.Submitted,
+  3: JobStatus.Completed,
+  4: JobStatus.Rejected,
+  5: JobStatus.Cancelled,
+  6: JobStatus.Disputed,
+};
+
+/**
  * On-chain job record from the `agentic_commerce` contract.
  *
  * Represents a complete work assignment with budget, lifecycle state, and timestamps.
