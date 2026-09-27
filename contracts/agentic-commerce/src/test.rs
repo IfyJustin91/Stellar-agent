@@ -128,7 +128,7 @@ fn create_job_transfers_budget_into_escrow() {
     // for this contract rather than asserting the entire list length.
     let all_events = env.events().all().filter_by_contract(&contract_id);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &contract_id),
     );
 
@@ -170,7 +170,7 @@ fn submit_flips_status_and_records_deliverable() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -258,7 +258,7 @@ fn complete_splits_payout_99_1_between_provider_and_treasury() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -322,7 +322,7 @@ fn cancel_refunds_buyer_when_not_yet_submitted() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -514,7 +514,7 @@ fn init_emits_initialized_event() {
     };
     let all_events = env.events().all().filter_by_contract(&contract_id);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected.to_xdr(&env, &contract_id),
     );
 }
@@ -927,4 +927,181 @@ fn upgrade_panics_when_not_initialized() {
     let admin = Address::generate(&env);
     let fake_hash: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
     client.upgrade(&admin, &fake_hash);
+}
+
+// ===========================================================================
+// #539 — Minimum fee floor / micro-budget tests
+// ===========================================================================
+
+/// simulate_job_fee with budget=5_000 and 100 bps must return 50, not 0.
+/// (The old divide-first formula returned 0 for any budget < 10_000.)
+#[test]
+fn simulate_job_fee_micro_budget_5000_default_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+
+    // 5_000 * 100 / 10_000 = 50
+    let fee = client.simulate_job_fee(&5_000i128, &100u32);
+    assert_eq!(fee, 50, "simulate_job_fee must return 50 for budget=5_000, bps=100");
+}
+
+/// End-to-end: complete a micro-job (budget = 5_000) and confirm the fee is
+/// non-zero (50 units) and the provider receives 4_950.
+#[test]
+fn complete_micro_job_5000_computes_nonzero_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury) = setup(&env);
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
+    stellar_token.mint(&buyer, &10_000);
+
+    // budget = 5_000, fee_bps = 100 (1%) → fee = 5_000*100/10_000 = 50
+    let budget: i128 = 5_000;
+    let id = client.create_job(
+        &buyer,
+        &seller,
+        &buyer,
+        &token_addr,
+        &budget,
+        &String::from_str(&env, "micro job"),
+    );
+    client.submit(&seller, &id, &String::from_str(&env, "ipfs://micro.json"));
+    client.complete(&buyer, &id);
+
+    assert_eq!(token.balance(&seller), 4_950, "provider should receive 4_950");
+    assert_eq!(token.balance(&treasury), 50, "treasury should receive 50 (1% of 5_000)");
+    assert_eq!(token.balance(&client.address), 0);
+
+    let job = client.get_job(&id).unwrap();
+    assert_eq!(job.status, JobStatus::Completed);
+}
+
+/// Budget = 1 with fee_bps = 100: 1 * 100 / 10_000 = 0 → minimum floor kicks
+/// in, so fee = 1 and provider receives 0.  The contract should still complete
+/// (fee transfer happens, payout is 0 which is skipped).
+#[test]
+fn complete_budget_1_triggers_minimum_fee_floor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury) = setup(&env);
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
+    stellar_token.mint(&buyer, &10_000);
+
+    // budget = 1, fee_bps = 100 → proportional fee = 0, floor = 1
+    let budget: i128 = 1;
+    let id = client.create_job(
+        &buyer,
+        &seller,
+        &buyer,
+        &token_addr,
+        &budget,
+        &String::from_str(&env, "dust job"),
+    );
+    client.submit(&seller, &id, &String::from_str(&env, "ipfs://dust.json"));
+    client.complete(&buyer, &id);
+
+    // fee = 1 (floor), payout = budget - fee = 0 (no transfer to provider)
+    assert_eq!(token.balance(&treasury), 1, "floor fee of 1 must reach treasury");
+    assert_eq!(token.balance(&client.address), 0);
+
+    let job = client.get_job(&id).unwrap();
+    assert_eq!(job.status, JobStatus::Completed);
+}
+
+/// Budget = 9_999 (just below BPS_DENOM) with 100 bps: 9_999*100/10_000 = 99.
+/// Old divide-first would give (9_999/10_000)*100 = 0. New result is 99.
+#[test]
+fn complete_budget_9999_computes_correct_fee_99() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury) = setup(&env);
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
+    stellar_token.mint(&buyer, &50_000);
+
+    let budget: i128 = 9_999;
+    let id = client.create_job(
+        &buyer,
+        &seller,
+        &buyer,
+        &token_addr,
+        &budget,
+        &String::from_str(&env, "near-threshold job"),
+    );
+    client.submit(&seller, &id, &String::from_str(&env, "ipfs://near.json"));
+    client.complete(&buyer, &id);
+
+    // 9_999 * 100 / 10_000 = 99  (integer division)
+    assert_eq!(token.balance(&treasury), 99, "fee should be 99");
+    assert_eq!(token.balance(&seller), 9_999 - 99, "provider should receive 9_900");
+    assert_eq!(token.balance(&client.address), 0);
+}
+
+/// simulate_job_fee must return the same value as the on-chain compute_fee
+/// for a micro-budget, confirming the helper was also fixed (#539).
+#[test]
+fn simulate_job_fee_matches_actual_fee_for_micro_budget() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury) = setup(&env);
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
+    stellar_token.mint(&buyer, &10_000);
+
+    let budget: i128 = 5_000;
+    let fee_bps: u32 = 100;
+
+    // Query the simulation first
+    let simulated_fee = client.simulate_job_fee(&budget, &fee_bps);
+    assert_eq!(simulated_fee, 50, "simulate_job_fee should return 50 for budget=5_000, bps=100");
+
+    // Now actually complete the job and confirm the real fee matches
+    let id = client.create_job(
+        &buyer,
+        &seller,
+        &buyer,
+        &token_addr,
+        &budget,
+        &String::from_str(&env, "simulation check job"),
+    );
+    client.submit(&seller, &id, &String::from_str(&env, "ipfs://sim.json"));
+    client.complete(&buyer, &id);
+
+    assert_eq!(token.balance(&treasury), simulated_fee,
+        "actual fee must equal simulated fee");
+}
+
+/// Budget = 0 with any fee_bps must return fee = 0 (no floor on zero-budget).
+/// (create_job rejects budget < MIN_BUDGET, so we test compute_fee semantics
+/// by using simulate_job_fee which is a pure wrapper.)
+#[test]
+fn simulate_job_fee_zero_budget_returns_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+
+    let fee = client.simulate_job_fee(&0i128, &100u32);
+    assert_eq!(fee, 0, "zero budget must produce zero fee");
+}
+
+/// fee_bps = 0 must always return fee = 0 regardless of budget size.
+#[test]
+fn simulate_job_fee_zero_bps_returns_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+
+    let fee = client.simulate_job_fee(&5_000i128, &0u32);
+    assert_eq!(fee, 0, "zero fee_bps must produce zero fee");
 }
