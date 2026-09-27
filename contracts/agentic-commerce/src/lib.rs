@@ -11,7 +11,10 @@ pub enum Error {
     InvalidParties = 2,
     /// The contract is paused; no state-changing operations are allowed.
     ContractPaused = 3,
-    // 4 and 5 are reserved for future use.
+    /// The job's current status does not permit the requested operation.
+    InvalidStatus = 4,
+    /// No job exists for the given id.
+    JobNotFound = 5,
     /// Caller is not the job's client.
     NotClient = 6,
     /// Caller is not the job's provider.
@@ -173,6 +176,17 @@ pub struct JobDisputed {
     #[topic]
     pub client: Address,
     pub job_id: u64,
+    pub timestamp: u64,
+}
+
+/// Emitted when a provider claims payment after the evaluator timeout has passed (#18).
+#[contractevent]
+pub struct JobExpired {
+    #[topic]
+    pub provider: Address,
+    pub job_id: u64,
+    pub payout: i128,
+    pub fee: i128,
     pub timestamp: u64,
 }
 
@@ -467,12 +481,12 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.provider {
             panic_with_error!(&env, Error::NotProvider);
         }
         if job.status != JobStatus::Funded {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         // #20 — reject empty or whitespace-only deliverables; a blank URI
         // would defeat the purpose of the escrow.
@@ -511,13 +525,13 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.evaluator {
             panic_with_error!(&env, Error::NotEvaluator);
         }
         // #22 — evaluator may resolve a job in either Submitted or Disputed state.
         if job.status != JobStatus::Submitted && job.status != JobStatus::Disputed {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         // #23 — use the fee_bps snapshotted at job creation time so admin
         // changes to the global rate don't retroactively alter this job.
@@ -563,13 +577,13 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.client {
             panic_with_error!(&env, Error::NotClient);
         }
         // #22 — allow cancel from Funded, Submitted, or Disputed.
         if job.status != JobStatus::Funded && job.status != JobStatus::Submitted && job.status != JobStatus::Disputed {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         // Refund only the net (unreleased) portion of the budget so the
         // contract never transfers more than it actually holds for this job.
@@ -609,12 +623,12 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.client {
             panic_with_error!(&env, Error::NotClient);
         }
         if job.status != JobStatus::Submitted {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         job.status = JobStatus::Disputed;
         job.updated_at = env.ledger().timestamp();
@@ -765,12 +779,12 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.client {
             panic_with_error!(&env, Error::NotClient);
         }
         if job.status != JobStatus::Funded {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         let now = env.ledger().timestamp();
         if now < job.funded_at + REFUND_TIMEOUT_SECS {
@@ -806,12 +820,12 @@ impl AgenticCommerceContract {
             .storage()
             .persistent()
             .get(&DataKey::Job(id))
-            .unwrap_or_else(|| panic!("job not found"));
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
         if caller != job.provider {
             panic_with_error!(&env, Error::NotProvider);
         }
         if job.status != JobStatus::Submitted {
-            panic!("invalid status");
+            panic_with_error!(&env, Error::InvalidStatus);
         }
         let now = env.ledger().timestamp();
         // `updated_at` is set to the submission time by `submit()` and does

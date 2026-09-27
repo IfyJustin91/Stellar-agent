@@ -128,7 +128,7 @@ fn create_job_transfers_budget_into_escrow() {
     // for this contract rather than asserting the entire list length.
     let all_events = env.events().all().filter_by_contract(&contract_id);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &contract_id),
     );
 
@@ -170,7 +170,7 @@ fn submit_flips_status_and_records_deliverable() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -258,7 +258,7 @@ fn complete_splits_payout_99_1_between_provider_and_treasury() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -322,7 +322,7 @@ fn cancel_refunds_buyer_when_not_yet_submitted() {
     // `init()` emits `Initialized` so we verify the last event only.
     let all_events = env.events().all().filter_by_contract(&client.address);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected_event.to_xdr(&env, &client.address),
     );
 
@@ -514,7 +514,7 @@ fn init_emits_initialized_event() {
     };
     let all_events = env.events().all().filter_by_contract(&contract_id);
     assert_eq!(
-        all_events.last().unwrap(),
+        all_events.events().last().unwrap().clone(),
         expected.to_xdr(&env, &contract_id),
     );
 }
@@ -524,10 +524,10 @@ fn init_emits_initialized_event() {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// 1. Double-complete panics with "invalid status"
+// 1. Double-complete panics with InvalidStatus (#4)
 // ---------------------------------------------------------------------------
 #[test]
-#[should_panic(expected = "invalid status")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn complete_panics_on_double_complete() {
     let env = Env::default();
     env.mock_all_auths();
@@ -620,6 +620,43 @@ fn get_job_returns_none_for_nonexistent_id() {
 }
 
 // ---------------------------------------------------------------------------
+// JobNotFound (#5) — explicit error code tests
+// ---------------------------------------------------------------------------
+
+/// submit() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn submit_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let seller = Address::generate(&env);
+    client.submit(&seller, &9999u64, &String::from_str(&env, "deliverable"));
+}
+
+/// complete() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn complete_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let buyer = Address::generate(&env);
+    client.complete(&buyer, &9999u64);
+}
+
+/// cancel() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn cancel_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let buyer = Address::generate(&env);
+    client.cancel(&buyer, &9999u64);
+}
+
+// ---------------------------------------------------------------------------
 // #21 — jobs_by_provider / jobs_by_client
 // ---------------------------------------------------------------------------
 #[test]
@@ -705,10 +742,10 @@ fn jobs_by_provider_returns_empty_for_unknown_provider() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Cancelling an already-cancelled job panics with "invalid status"
+// 5. Cancelling an already-cancelled job panics with InvalidStatus (#4)
 // ---------------------------------------------------------------------------
 #[test]
-#[should_panic(expected = "invalid status")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn cancel_panics_on_already_cancelled_job() {
     let env = Env::default();
     env.mock_all_auths();
