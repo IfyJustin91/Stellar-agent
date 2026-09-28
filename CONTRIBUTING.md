@@ -10,6 +10,8 @@ Thank you for contributing to Bear — the commerce layer for AI agent payments 
 4. [CLAUDE.md Update Protocol](#claudemd-update-protocol)
 5. [Self-Audit Checklist](#self-audit-checklist)
 6. [Workflow](#workflow)
+7. [Pre-Commit Hooks](#pre-commit-hooks)
+8. [WASM Size Budgets](#wasm-size-budgets)
 
 ---
 
@@ -351,6 +353,29 @@ Before committing ANY task, verify all of the following:
 ---
 
 ## Workflow
+
+### Pre-Commit Hooks
+
+Run `npm install` at the repository root to install Husky hooks; rerun
+`npm run prepare` if hook installation was skipped. The pre-commit
+hook checks Rust formatting and clippy, then runs Prettier on staged supported
+files through `lint-staged`. The commit-message hook checks Conventional Commit
+format and prints examples when a message is rejected. These shell hooks run
+through Git's POSIX-compatible shell on macOS/Linux and Git for Windows; Rust
+must be available on `PATH`.
+
+To check a message manually, run `npm exec -- commitlint --from HEAD~1 --to HEAD`.
+
+### WASM Size Budgets
+
+CI optimizes Soroban WASM artifacts before checking their sizes. The default
+budgets are 8,192 bytes for `agent_identity.wasm` and 16,384 bytes for
+`agentic_commerce.wasm`. Configure repository Actions variables
+`IDENTITY_WASM_BUDGET_BYTES` and `COMMERCE_WASM_BUDGET_BYTES` to change these
+limits. Every CI run reports both exact sizes and configured limits.
+
+The size check uses the workspace's `wasm32v1-none` target and the Stellar CLI
+optimizer, matching the artifacts produced by `scripts/build.sh`.
 
 ### For Feature Work
 

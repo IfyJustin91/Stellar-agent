@@ -89,6 +89,40 @@ pub struct Job {
     pub fee_bps: u32,
 }
 
+/// Evaluator quorum stored separately from `Job` to preserve existing job XDR.
+#[contracttype]
+#[derive(Clone)]
+pub struct JobEvaluators {
+    pub evaluators: Vec<Address>,
+    pub threshold: u32,
+    pub approvals: soroban_sdk::Map<Address, bool>,
+}
+
+/// Monotonic payment commitment signed by the payer's channel key.
+#[contracttype]
+#[derive(Clone)]
+pub struct ChannelVoucher {
+    pub channel_id: u64,
+    pub amount: i128,
+    pub nonce: u64,
+}
+
+/// Escrowed one-way payment channel with a payer-selected voucher key.
+#[contracttype]
+#[derive(Clone)]
+pub struct PaymentChannel {
+    pub id: u64,
+    pub payer: Address,
+    pub provider: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub amount: i128,
+    pub nonce: u64,
+    pub opened_at: u64,
+    pub closing_at: u64,
+    pub voucher_key: soroban_sdk::BytesN<32>,
+}
+
 #[contracttype]
 enum DataKey {
     NextId,
@@ -99,6 +133,10 @@ enum DataKey {
     Version,
     /// #29 — emergency pause flag. Stored as bool; absent == not paused.
     Paused,
+    NextChannelId,
+    Evaluators(u64),
+    Channel(u64),
+    MultiEvalThreshold,
 }
 
 const DEFAULT_FEE_BPS: u32 = 100; // 1%
@@ -109,6 +147,9 @@ const REFUND_TIMEOUT_SECS: u64 = 7 * 24 * 3600; // 7 days
 const MIN_BUDGET: i128 = 1;
 /// #619 — maximum deliverable URI length to prevent storage griefing.
 const MAX_DELIVERABLE_LEN: u32 = 1024;
+const MAX_EVALUATORS: u32 = 5;
+const DEFAULT_MULTI_EVAL_THRESHOLD: i128 = i128::MAX;
+const CHANNEL_DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60;
 
 // --- Events ---
 
@@ -215,6 +256,41 @@ pub struct ReInitialized {
     pub new_treasury: Address,
 }
 
+#[contractevent]
+pub struct ChannelOpened {
+    #[topic]
+    pub payer: Address,
+    pub channel_id: u64,
+    pub provider: Address,
+    pub deposit: i128,
+}
+
+#[contractevent]
+pub struct ChannelClosing {
+    #[topic]
+    pub actor: Address,
+    pub channel_id: u64,
+    pub amount: i128,
+    pub challenge_until: u64,
+}
+
+#[contractevent]
+pub struct ChannelSettled {
+    #[topic]
+    pub channel_id: u64,
+    pub amount: i128,
+    pub refund: i128,
+}
+
+#[contractevent]
+pub struct JobApproved {
+    #[topic]
+    pub evaluator: Address,
+    pub job_id: u64,
+    pub approvals: u32,
+    pub threshold: u32,
+}
+
 #[contract]
 pub struct AgenticCommerceContract;
 
@@ -253,6 +329,30 @@ impl AgenticCommerceContract {
             .checked_mul(fee_bps as i128)
             .expect("fee overflow")
     }
+
+    fn voucher_message(env: &Env, voucher: &ChannelVoucher) -> soroban_sdk::Bytes {
+        let mut message = soroban_sdk::Bytes::from_slice(env, b"BEAR_CHANNEL_V1");
+        message.extend_from_array(&voucher.channel_id.to_be_bytes());
+        message.extend_from_array(&voucher.amount.to_be_bytes());
+        message.extend_from_array(&voucher.nonce.to_be_bytes());
+        message
+    }
+
+    fn verify_voucher(
+        env: &Env,
+        channel: &PaymentChannel,
+        voucher: &ChannelVoucher,
+        signature: &soroban_sdk::BytesN<64>,
+    ) {
+        if voucher.channel_id != channel.id || voucher.amount < 0 || voucher.amount > channel.deposit {
+            panic!("invalid channel voucher");
+        }
+        env.crypto().ed25519_verify(
+            &channel.voucher_key,
+            &Self::voucher_message(env, voucher),
+            signature,
+        );
+    }
 }
 
 #[contractimpl]
@@ -274,9 +374,13 @@ impl AgenticCommerceContract {
             panic!("treasury cannot be zero address");
         }
         env.storage().instance().set(&DataKey::NextId, &1u64);
+        env.storage().instance().set(&DataKey::NextChannelId, &1u64);
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &DEFAULT_FEE_BPS);
+        env.storage()
+            .instance()
+            .set(&DataKey::MultiEvalThreshold, &DEFAULT_MULTI_EVAL_THRESHOLD);
 
         // #31 — emit Initialized event so indexers can track contract setup.
         Initialized {
@@ -412,6 +516,14 @@ impl AgenticCommerceContract {
         if budget < MIN_BUDGET {
             panic!("budget below minimum");
         }
+        let multi_eval_threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MultiEvalThreshold)
+            .unwrap_or(DEFAULT_MULTI_EVAL_THRESHOLD);
+        if budget > multi_eval_threshold {
+            panic!("high-value job requires multiple evaluators");
+        }
         // Party validation (#323): prevent self-escrow and invalid party
         // combinations before any storage reads or token transfers.
         if client_addr == provider {
@@ -473,6 +585,112 @@ impl AgenticCommerceContract {
         next
     }
 
+    /// Create and fund a high-value job with an explicit evaluator quorum.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_job_multi_eval(
+        env: Env,
+        client_addr: Address,
+        provider: Address,
+        evaluators: Vec<Address>,
+        threshold: u32,
+        token: Address,
+        budget: i128,
+        description: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        client_addr.require_auth();
+        if !env.storage().instance().has(&DataKey::Admin) {
+            panic!("not initialized");
+        }
+        if budget < MIN_BUDGET {
+            panic!("budget below minimum");
+        }
+        let multi_eval_threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MultiEvalThreshold)
+            .unwrap_or(DEFAULT_MULTI_EVAL_THRESHOLD);
+        if budget <= multi_eval_threshold {
+            panic!("job does not meet multi-evaluator threshold");
+        }
+        if evaluators.is_empty()
+            || evaluators.len() > MAX_EVALUATORS
+            || threshold == 0
+            || threshold > evaluators.len()
+        {
+            panic!("invalid evaluator quorum");
+        }
+        if provider == client_addr {
+            panic_with_error!(&env, Error::SelfEscrow);
+        }
+        let mut index = 0u32;
+        while index < evaluators.len() {
+            let evaluator = evaluators.get(index).unwrap();
+            if evaluator == provider {
+                panic_with_error!(&env, Error::InvalidParties);
+            }
+            let mut previous = 0;
+            while previous < index {
+                if evaluators.get(previous).unwrap() == evaluator {
+                    panic!("duplicate evaluator");
+                }
+                previous += 1;
+            }
+            index += 1;
+        }
+
+        let next: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(1u64);
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(DEFAULT_FEE_BPS);
+        let token_client = token::TokenClient::new(&env, &token);
+        let contract_addr = env.current_contract_address();
+        token_client.balance(&contract_addr);
+        token_client.transfer(&client_addr, &contract_addr, &budget);
+
+        let now = env.ledger().timestamp();
+        let primary_evaluator = evaluators.get(0).unwrap();
+        let job = Job {
+            id: next,
+            client: client_addr.clone(),
+            provider,
+            evaluator: primary_evaluator,
+            token,
+            budget,
+            released: 0,
+            status: JobStatus::Funded,
+            description,
+            deliverable: String::from_str(&env, ""),
+            funded_at: now,
+            created_at: now,
+            updated_at: now,
+            fee_bps,
+        };
+        env.storage().persistent().set(&DataKey::Job(next), &job);
+        env.storage().persistent().set(
+            &DataKey::Evaluators(next),
+            &JobEvaluators {
+                evaluators,
+                threshold,
+                approvals: soroban_sdk::Map::new(&env),
+            },
+        );
+        env.storage().instance().set(&DataKey::NextId, &(next + 1));
+        JobCreated {
+            client: client_addr,
+            job_id: next,
+            budget,
+        }
+        .publish(&env);
+        next
+    }
+
     /// Provider submits the deliverable. Flips status Funded → Submitted.
     pub fn submit(env: Env, caller: Address, id: u64, deliverable: String) {
         Self::require_not_paused(&env); // #29
@@ -529,6 +747,9 @@ impl AgenticCommerceContract {
         if caller != job.evaluator {
             panic_with_error!(&env, Error::NotEvaluator);
         }
+        if env.storage().persistent().has(&DataKey::Evaluators(id)) {
+            panic!("multi-evaluator job requires approvals");
+        }
         // #22 — evaluator may resolve a job in either Submitted or Disputed state.
         if job.status != JobStatus::Submitted && job.status != JobStatus::Disputed {
             panic_with_error!(&env, Error::InvalidStatus);
@@ -560,6 +781,84 @@ impl AgenticCommerceContract {
             timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
+    }
+
+    /// Record an evaluator approval and release escrow when quorum is reached.
+    pub fn approve_job(env: Env, evaluator: Address, job_id: u64) -> u32 {
+        Self::require_not_paused(&env);
+        evaluator.require_auth();
+        let mut job: Job = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Job(job_id))
+            .unwrap_or_else(|| panic_with_error!(&env, Error::JobNotFound));
+        if job.status != JobStatus::Submitted && job.status != JobStatus::Disputed {
+            panic_with_error!(&env, Error::InvalidStatus);
+        }
+        let mut quorum: JobEvaluators = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Evaluators(job_id))
+            .unwrap_or_else(|| panic!("job does not require multi-evaluator approval"));
+        let mut member = false;
+        for address in quorum.evaluators.iter() {
+            if address == evaluator {
+                member = true;
+                break;
+            }
+        }
+        if !member {
+            panic!("not an assigned evaluator");
+        }
+        if quorum.approvals.get(evaluator.clone()).unwrap_or(false) {
+            panic!("evaluator already approved");
+        }
+        quorum.approvals.set(evaluator.clone(), true);
+        let mut approval_count = 0u32;
+        for address in quorum.evaluators.iter() {
+            if quorum.approvals.get(address).unwrap_or(false) {
+                approval_count += 1;
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Evaluators(job_id), &quorum);
+        JobApproved {
+            evaluator: evaluator.clone(),
+            job_id,
+            approvals: approval_count,
+            threshold: quorum.threshold,
+        }
+        .publish(&env);
+        if approval_count >= quorum.threshold {
+            Self::settle_job(&env, &mut job, job_id, evaluator);
+        }
+        approval_count
+    }
+
+    fn settle_job(env: &Env, job: &mut Job, id: u64, evaluator: Address) {
+        let fee = Self::compute_fee(job.budget, job.fee_bps);
+        let payout = job.budget - fee;
+        job.status = JobStatus::Completed;
+        job.released = job.budget;
+        job.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::Job(id), job);
+        let token_client = token::TokenClient::new(env, &job.token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &job.provider, &payout);
+        if fee > 0 {
+            let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
+            token_client.transfer(&contract_addr, &treasury, &fee);
+        }
+        JobCompleted {
+            evaluator,
+            job_id: id,
+            provider: job.provider.clone(),
+            payout,
+            fee,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(env);
     }
 
     /// Client cancels a funded (not-yet-submitted) job and reclaims the unreleased budget.
@@ -597,6 +896,7 @@ impl AgenticCommerceContract {
         job.status = JobStatus::Cancelled;
         job.updated_at = env.ledger().timestamp();
         env.storage().persistent().set(&DataKey::Job(id), &job);
+        env.storage().persistent().remove(&DataKey::Evaluators(id));
 
         JobCancelled {
             client: caller,
@@ -677,6 +977,30 @@ impl AgenticCommerceContract {
         env.storage().instance().set(&DataKey::FeeBps, &new_bps);
     }
 
+    /// Admin updates the smallest-unit budget threshold above which jobs must
+    /// use `create_job_multi_eval`. Set to i128::MAX to disable the requirement.
+    pub fn set_multi_eval_threshold(env: Env, caller: Address, threshold: i128) {
+        caller.require_auth();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != admin {
+            panic_with_error!(&env, Error::NotAdmin);
+        }
+        if threshold < 0 {
+            panic!("threshold cannot be negative");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MultiEvalThreshold, &threshold);
+    }
+
+    /// Read the configured high-value threshold in token smallest units.
+    pub fn multi_eval_threshold(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MultiEvalThreshold)
+            .unwrap_or(DEFAULT_MULTI_EVAL_THRESHOLD)
+    }
+
     /// Current fee in basis points.
     pub fn fee_bps(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::FeeBps).unwrap()
@@ -697,6 +1021,170 @@ impl AgenticCommerceContract {
     /// Fetch a job by id.
     pub fn get_job(env: Env, id: u64) -> Option<Job> {
         env.storage().persistent().get(&DataKey::Job(id))
+    }
+
+    /// Read the evaluator list, quorum, and approval count for a multi-eval job.
+    pub fn get_evaluator_progress(env: Env, id: u64) -> Option<(Vec<Address>, u32, u32)> {
+        let quorum: Option<JobEvaluators> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Evaluators(id));
+        quorum.map(|quorum| {
+            let mut approvals = 0u32;
+            for evaluator in quorum.evaluators.iter() {
+                if quorum.approvals.get(evaluator).unwrap_or(false) {
+                    approvals += 1;
+                }
+            }
+            (quorum.evaluators, quorum.threshold, approvals)
+        })
+    }
+
+    /// Open a one-way channel by escrowing a fixed token deposit.
+    pub fn open_channel(
+        env: Env,
+        payer: Address,
+        provider: Address,
+        token: Address,
+        deposit: i128,
+        voucher_key: soroban_sdk::BytesN<32>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        payer.require_auth();
+        if !env.storage().instance().has(&DataKey::Admin) {
+            panic!("not initialized");
+        }
+        if deposit < MIN_BUDGET {
+            panic!("deposit below minimum");
+        }
+        if payer == provider {
+            panic_with_error!(&env, Error::SelfEscrow);
+        }
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextChannelId)
+            .unwrap_or(1u64);
+        let token_client = token::TokenClient::new(&env, &token);
+        let contract_addr = env.current_contract_address();
+        token_client.balance(&contract_addr);
+        token_client.transfer(&payer, &contract_addr, &deposit);
+        let channel = PaymentChannel {
+            id,
+            payer: payer.clone(),
+            provider: provider.clone(),
+            token,
+            deposit,
+            amount: 0,
+            nonce: 0,
+            opened_at: env.ledger().timestamp(),
+            closing_at: 0,
+            voucher_key,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Channel(id), &channel);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextChannelId, &(id + 1));
+        ChannelOpened {
+            payer,
+            channel_id: id,
+            provider,
+            deposit,
+        }
+        .publish(&env);
+        id
+    }
+
+    /// Start the 24-hour challenge window or replace the current voucher with
+    /// a higher-value payer-signed voucher while that window remains open.
+    pub fn close_channel(
+        env: Env,
+        caller: Address,
+        channel_id: u64,
+        voucher: ChannelVoucher,
+        signature: soroban_sdk::BytesN<64>,
+    ) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+        let mut channel: PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Channel(channel_id))
+            .unwrap_or_else(|| panic!("channel not found"));
+        if caller != channel.provider && caller != channel.payer {
+            panic!("not a channel participant");
+        }
+        let now = env.ledger().timestamp();
+        if channel.closing_at != 0 && now >= channel.closing_at {
+            panic!("channel challenge window ended");
+        }
+        Self::verify_voucher(&env, &channel, &voucher, &signature);
+        if voucher.amount < channel.amount || voucher.nonce <= channel.nonce {
+            panic!("voucher is not newer");
+        }
+        channel.amount = voucher.amount;
+        channel.nonce = voucher.nonce;
+        if channel.closing_at == 0 {
+            channel.closing_at = now + CHANNEL_DISPUTE_WINDOW_SECS;
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Channel(channel_id), &channel);
+        ChannelClosing {
+            actor: caller,
+            channel_id,
+            amount: channel.amount,
+            challenge_until: channel.closing_at,
+        }
+        .publish(&env);
+    }
+
+    /// Settle the latest signed voucher after the 24-hour challenge period.
+    /// Either channel participant may submit settlement once the period ends.
+    pub fn force_close(env: Env, caller: Address, channel_id: u64) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+        let channel: PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Channel(channel_id))
+            .unwrap_or_else(|| panic!("channel not found"));
+        if caller != channel.payer && caller != channel.provider {
+            panic!("not a channel participant");
+        }
+        let challenge_until = if channel.closing_at == 0 {
+            channel.opened_at + CHANNEL_DISPUTE_WINDOW_SECS
+        } else {
+            channel.closing_at
+        };
+        if env.ledger().timestamp() < challenge_until {
+            panic!("channel challenge window active");
+        }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Channel(channel_id));
+        let refund = channel.deposit - channel.amount;
+        let token_client = token::TokenClient::new(&env, &channel.token);
+        let contract_addr = env.current_contract_address();
+        if channel.amount > 0 {
+            token_client.transfer(&contract_addr, &channel.provider, &channel.amount);
+        }
+        if refund > 0 {
+            token_client.transfer(&contract_addr, &channel.payer, &refund);
+        }
+        ChannelSettled {
+            channel_id,
+            amount: channel.amount,
+            refund,
+        }
+        .publish(&env);
+    }
+
+    /// Read an active payment channel (including its latest accepted voucher).
+    pub fn get_channel(env: Env, channel_id: u64) -> Option<PaymentChannel> {
+        env.storage().persistent().get(&DataKey::Channel(channel_id))
     }
 
     /// Returns up to `limit` jobs where `provider` is the job's provider,
@@ -801,6 +1289,7 @@ impl AgenticCommerceContract {
         job.status = JobStatus::Cancelled;
         job.updated_at = now;
         env.storage().persistent().set(&DataKey::Job(id), &job);
+        env.storage().persistent().remove(&DataKey::Evaluators(id));
 
         JobRefunded {
             client: caller,
@@ -826,6 +1315,9 @@ impl AgenticCommerceContract {
         }
         if job.status != JobStatus::Submitted {
             panic_with_error!(&env, Error::InvalidStatus);
+        }
+        if env.storage().persistent().has(&DataKey::Evaluators(id)) {
+            panic!("multi-evaluator job cannot use provider timeout payout");
         }
         let now = env.ledger().timestamp();
         // `updated_at` is set to the submission time by `submit()` and does

@@ -12,11 +12,12 @@ Bear Protocol is a 3-layer commerce stack that gives AI agents on-chain identity
 4. [Agent Communication Flow](#agent-communication-flow)
 5. [Dashboard Request Flow](#dashboard-request-flow-freighter-vs-server-keypair)
 6. [x402 Micropayment Lifecycle](#x402-micropayment-lifecycle)
-7. [Layer Sequence Diagrams](#layer-sequence-diagrams)
-8. [Dependency Graph](#dependency-graph)
-9. [Data Model](#data-model)
-10. [Capability Tag Taxonomy](#capability-tag-taxonomy)
-11. [Dashboard Security Headers (CSP)](#dashboard-security-headers-csp)
+7. [Payment Channels](#payment-channels)
+8. [Layer Sequence Diagrams](#layer-sequence-diagrams)
+9. [Dependency Graph](#dependency-graph)
+10. [Data Model](#data-model)
+11. [Capability Tag Taxonomy](#capability-tag-taxonomy)
+12. [Dashboard Security Headers (CSP)](#dashboard-security-headers-csp)
 
 ---
 
@@ -75,6 +76,13 @@ block-beta
 ---
 
 ## Contract Interactions
+
+High-value jobs can be configured to require M-of-N evaluator approval. The
+admin sets a token-smallest-unit threshold; ordinary `create_job` calls above
+it are rejected, while `create_job_multi_eval` stores up to five evaluators
+and an approval threshold. `approve_job` records each evaluator once and
+releases escrow automatically when quorum is reached. Job quorum data is kept
+separate from the existing `Job` record to preserve its stored XDR layout.
 
 ```mermaid
 sequenceDiagram
@@ -221,6 +229,43 @@ sequenceDiagram
 ```
 
 ---
+
+## Payment Channels
+
+High-frequency one-way micropayments use an escrowed Soroban payment channel.
+The payer opens a channel with a fixed token deposit and an Ed25519 public key
+dedicated to voucher signing. Each API payment is a cumulative voucher signed
+off-chain over the domain-separated payload `BEAR_CHANNEL_V1 || channel_id ||
+amount || nonce`, encoded as big-endian integers. The SDK's
+`PaymentChannelSession.createVoucher()` returns these signatures locally; it
+does not submit a Stellar transaction per request.
+
+```mermaid
+sequenceDiagram
+  participant Payer
+  participant Provider
+  participant Contract as agentic-commerce
+
+  Payer->>Contract: open_channel(provider, deposit, voucher key)
+  Contract-->>Payer: channel_id
+  loop Each API call
+    Payer->>Payer: sign cumulative amount + increasing nonce
+    Payer-->>Provider: signed voucher (off-chain)
+  end
+  Provider->>Contract: close_channel(highest voucher, signature)
+  Note over Contract: 24-hour challenge period
+  Payer->>Contract: close_channel(newer voucher, signature) (optional)
+  Provider->>Contract: force_close(channel_id) after challenge period
+  Contract->>Provider: pay accepted voucher amount
+  Contract->>Payer: refund unused deposit
+```
+
+The contract verifies vouchers against the payer-selected key and accepts only
+non-decreasing amounts with strictly increasing nonces. Either participant
+can submit a fresher voucher during the 24-hour challenge window and either
+can finalize after it; settlement pays the provider the latest accepted
+amount and returns the unused deposit to the payer. If no voucher is submitted,
+the payer can reclaim the full deposit after the same timeout.
 
 ## Layer Sequence Diagrams
 

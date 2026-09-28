@@ -57,6 +57,20 @@ await commerce.submit(providerKeypair, jobId, "https://ipfs.io/ipfs/<deliverable
 // Evaluator approves → funds released 99 % provider / 1 % treasury
 await commerce.complete(evaluatorKeypair, jobId);
 
+// ── High-frequency micropayments (off-chain vouchers) ───────────────────────
+const channel = await commerce.openChannel(
+  payerKeypair,
+  providerAddress,
+  10_000_000n,
+  channelVoucherKeypair,
+);
+let latestVoucher = channel.createVoucher(1_000n);
+for (let request = 1; request < 100; request += 1) {
+  latestVoucher = channel.createVoucher(1_000n); // signed locally; no RPC call
+}
+await commerce.closeChannel(channel.channelId, latestVoucher, providerKeypair);
+// After 24 hours, either participant calls forceClose(participant, channelId).
+
 // ── Paywall middleware (Express) ──────────────────────────────────────────────
 import express from "express";
 import { marcPaywall } from "marc-stellar-sdk";
@@ -145,6 +159,11 @@ install link (`https://www.freighter.app/`) so apps can surface a helpful prompt
 | `submit(keypair, jobId, deliverable)`                                 | Provider submits work                         |
 | `complete(keypair, jobId)`                                            | Evaluator approves; triggers payout           |
 | `cancel(keypair, jobId)`                                              | Client cancels and recovers budget            |
+| `createJobMultiEval(client, provider, evaluators, threshold, ...)`     | Fund a job requiring M-of-N evaluator approvals |
+| `approveJob(evaluator, jobId)`                                        | Record approval; pays out at quorum            |
+| `openChannel(payer, provider, deposit, voucherKeypair, token?)`       | Open a one-way escrowed payment channel         |
+| `closeChannel(channelId, voucher, provider)`                           | Submit or challenge with a signed cumulative voucher |
+| `forceClose(participant, channelId)`                                   | Settle after the 24-hour challenge period       |
 | `getJob(jobId)`                                                       | Fetch a `Job` record                          |
 | `feeBps()`                                                            | Read the current protocol fee in basis points |
 
@@ -200,6 +219,12 @@ import type {
   CommerceEventName,
 } from "marc-stellar-sdk";
 ```
+
+Providers can validate collected signatures with `verifyChannelVoucher(voucher,
+voucherPublicKey)`. Vouchers are cumulative, domain-separated commitments;
+store the highest-value valid voucher and submit it during channel closing.
+Use a dedicated voucher keypair and keep its secret private; it is distinct
+from the wallet that funds the on-chain channel.
 
 ## Publishing (maintainers)
 

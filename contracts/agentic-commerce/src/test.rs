@@ -965,3 +965,295 @@ fn upgrade_panics_when_not_initialized() {
     let fake_hash: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
     client.upgrade(&admin, &fake_hash);
 }
+
+#[test]
+fn multi_eval_two_of_three_settles_only_at_quorum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
+    );
+    let (token, token_client, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "2-of-3"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+
+    assert_eq!(client.approve_job(&evaluators.get(0).unwrap(), &id), 1);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Submitted);
+    assert_eq!(token_client.balance(&provider), 0);
+    assert_eq!(client.approve_job(&evaluators.get(1).unwrap(), &id), 2);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Completed);
+    assert_eq!(token_client.balance(&provider), 99_000);
+    assert_eq!(token_client.balance(&treasury), 1_000);
+}
+
+#[test]
+fn multi_eval_three_of_five_waits_for_third_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
+    );
+    let (token, token_client, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &3,
+        &token,
+        &100_000,
+        &String::from_str(&env, "3-of-5"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+
+    client.approve_job(&evaluators.get(0).unwrap(), &id);
+    client.approve_job(&evaluators.get(1).unwrap(), &id);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Submitted);
+    client.approve_job(&evaluators.get(2).unwrap(), &id);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Completed);
+    assert_eq!(token_client.balance(&provider), 99_000);
+}
+
+#[test]
+#[should_panic(expected = "multi-evaluator job requires approvals")]
+fn multi_eval_job_cannot_use_single_evaluator_complete() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "quorum required"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    client.complete(&evaluators.get(0).unwrap(), &id);
+}
+
+#[test]
+#[should_panic(expected = "not an assigned evaluator")]
+fn multi_eval_rejects_non_member_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "assigned evaluators only"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    client.approve_job(&outsider, &id);
+}
+
+#[test]
+#[should_panic(expected = "evaluator already approved")]
+fn multi_eval_rejects_duplicate_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "one approval each"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    let evaluator = evaluators.get(0).unwrap();
+    client.approve_job(&evaluator, &id);
+    client.approve_job(&evaluator, &id);
+}
+
+#[test]
+#[should_panic(expected = "high-value job requires multiple evaluators")]
+fn high_value_job_requires_multi_eval_creation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    client.set_multi_eval_threshold(&admin, &50_000);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job(
+        &buyer,
+        &provider,
+        &Address::generate(&env),
+        &token,
+        &100_000,
+        &String::from_str(&env, "must use evaluator quorum"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "job does not meet multi-evaluator threshold")]
+fn multi_eval_creation_rejects_below_threshold_budget() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    client.set_multi_eval_threshold(&admin, &50_000);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &10_000,
+        &String::from_str(&env, "below multi-eval threshold"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "invalid evaluator quorum")]
+fn multi_eval_rejects_threshold_greater_than_evaluator_count() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &3,
+        &token,
+        &100_000,
+        &String::from_str(&env, "invalid quorum"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "duplicate evaluator")]
+fn multi_eval_rejects_duplicate_evaluator_addresses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluator = Address::generate(&env);
+    let evaluators = Vec::from_array(&env, [evaluator.clone(), evaluator]);
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "duplicate evaluator"),
+    );
+}
+
+#[test]
+fn open_channel_escrows_deposit_and_stores_voucher_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let payer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token_addr, token, asset) = deploy_token(&env, &admin);
+    asset.mint(&payer, &1_000_000);
+    let voucher_key = BytesN::from_array(&env, &[7u8; 32]);
+
+    let channel_id = client.open_channel(&payer, &provider, &token_addr, &100_000, &voucher_key);
+
+    assert_eq!(channel_id, 1);
+    assert_eq!(token.balance(&client.address), 100_000);
+    let channel = client.get_channel(&channel_id).unwrap();
+    assert_eq!(channel.payer, payer);
+    assert_eq!(channel.provider, provider);
+    assert_eq!(channel.deposit, 100_000);
+    assert_eq!(channel.voucher_key, voucher_key);
+}
+
+#[test]
+#[should_panic(expected = "channel challenge window active")]
+fn channel_cannot_be_force_closed_before_challenge_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let payer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token_addr, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&payer, &1_000_000);
+    let voucher_key = BytesN::from_array(&env, &[7u8; 32]);
+    let channel_id = client.open_channel(&payer, &provider, &token_addr, &100_000, &voucher_key);
+
+    client.force_close(&payer, &channel_id);
+}

@@ -1,0 +1,6 @@
+npm exec -- commitlint --edit "$1" || {
+  echo "Commit message must follow Conventional Commits, for example:"
+  echo "  feat(commerce): add evaluator quorum"
+  echo "  fix(sdk): validate channel voucher"
+  exit 1
+}

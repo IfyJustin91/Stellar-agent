@@ -1298,10 +1298,19 @@
             j.id +
             "')\">Cancel</button>";
         } else if (j.status === "Submitted") {
-          actions =
-            '<button class="btn btn-primary btn-sm" onclick="window.__completeJob(\'' +
-            j.id +
-            "')\">Complete (Release Funds)</button>";
+          if (j.evaluatorProgress) {
+            if (j.evaluatorProgress.approvals < j.evaluatorProgress.threshold) {
+              actions =
+                '<button class="btn btn-primary btn-sm" onclick="window.__approveJob(\'' +
+                j.id +
+                "')\">Approve quorum</button>";
+            }
+          } else {
+            actions +=
+              '<button class="btn btn-primary btn-sm" onclick="window.__completeJob(\'' +
+              j.id +
+              "')\">Complete (Release Funds)</button>";
+          }
         } else {
           actions =
             '<span style="font-size:13px;color:var(--text-dim)">Job is ' +
@@ -1317,6 +1326,19 @@
             '<div class="detail-value">' +
             renderDeliverable(j.deliverable) +
             "</div></div>";
+        }
+
+        let evaluatorProgressHtml = "";
+        if (j.evaluatorProgress) {
+          const progress = j.evaluatorProgress;
+          const percent = Math.min(100, Math.round((progress.approvals / progress.threshold) * 100));
+          evaluatorProgressHtml =
+            '<div class="detail-item evaluator-progress-item" style="grid-column:1/-1">' +
+            '<div class="evaluator-progress-heading"><div class="detail-label">Evaluator approvals</div>' +
+            '<div class="evaluator-progress-count">' + progress.approvals + ' / ' + progress.threshold + '</div></div>' +
+            '<div class="evaluator-progress-track" role="progressbar" aria-label="Evaluator approvals" aria-valuemin="0" aria-valuemax="' +
+            progress.threshold + '" aria-valuenow="' + progress.approvals + '"><span style="width:' + percent + '%"></span></div>' +
+            '</div>';
         }
 
          content +=
@@ -1364,6 +1386,7 @@
               escapeHtml(formatRelativeTime(j.created_at)) +
               "</div></div>"
             : "") +
+          evaluatorProgressHtml +
           deliverableHtml +
           "</div>" +
           '<div class="job-actions">' +
@@ -1939,6 +1962,28 @@
       }
       hideTxOverlay();
       toast("Job #" + id + " completed! Funds released.");
+      await loadJobs();
+      renderJobList();
+    } catch (e) {
+      hideTxOverlay();
+      notifyError(e);
+    } finally {
+      state.txPending = false;
+    }
+  };
+
+  window.__approveJob = async function (id) {
+    if (state.txPending) return;
+    state.txPending = true;
+    showTxOverlay("Recording evaluator approval...");
+    try {
+      if (wallet.connected) {
+        await signAndSubmit("/build/approve", { jobId: id });
+      } else {
+        await api("/jobs/" + id + "/approve", { method: "POST", body: { wallet: "buyer" } });
+      }
+      hideTxOverlay();
+      toast("Approval recorded for job #" + id + ".");
       await loadJobs();
       renderJobList();
     } catch (e) {
