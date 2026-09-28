@@ -95,6 +95,12 @@ services:
     "
     ports:
       - "4501:4501"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4501/health || node -e \"fetch('http://localhost:4501/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       sdk:
         condition: service_completed_successfully
@@ -110,6 +116,12 @@ services:
     "
     ports:
       - "4502:4502"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4502/health || node -e \"fetch('http://localhost:4502/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       sdk:
         condition: service_completed_successfully
@@ -125,6 +137,12 @@ services:
     "
     ports:
       - "4503:4503"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4503/health || node -e \"fetch('http://localhost:4503/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       sdk:
         condition: service_completed_successfully
@@ -140,10 +158,30 @@ services:
     "
     ports:
       - "4504:4504"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4504/health || node -e \"fetch('http://localhost:4504/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       sdk:
         condition: service_completed_successfully
       registry:
+        condition: service_healthy
+
+  # ── Soroban Event Indexer ─────────────────────────────────────────────────
+  indexer:
+    <<: *node
+    working_dir: /app/indexer
+    command: sh -c "
+      npm install --silent 2>/dev/null &&
+      npx tsx src/index.ts
+    "
+    depends_on:
+      sdk:
+        condition: service_completed_successfully
+      soroban-rpc:
         condition: service_healthy
 
   # ── Buyer TUI (interactive) ───────────────────────────────────────────────

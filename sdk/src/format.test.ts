@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatAmount, isValidMetadataUri, parseAmount } from "./format.js";
+import { decodeBase64, formatAmount, isValidMetadataUri, parseAmount } from "./format.js";
+
+test("decodeBase64 decodes ASCII and UTF-8 strings", () => {
+  assert.equal(decodeBase64(Buffer.from("payment").toString("base64")), "payment");
+  assert.equal(decodeBase64(Buffer.from("café").toString("base64")), "café");
+});
 
 // ===========================================================================
 // isValidMetadataUri (existing tests preserved)

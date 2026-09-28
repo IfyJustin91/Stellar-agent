@@ -9,7 +9,8 @@
     "demo",
     "landing",
     "agents",
-    "agents/*"
+    "agents/*",
+    "indexer"
   ],
   "scripts": {
     "format": "prettier --write .",
@@ -18,10 +19,16 @@
     "test": "cargo test --workspace && npm run test --workspaces --if-present",
     "test:rust": "cargo test --workspace",
     "test:ts": "npm run test --workspaces --if-present",
-    "prepare": "husky install"
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{css,html,js,json,md,ts,tsx}": "prettier --write"
   },
   "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
     "husky": "^9.0.11",
+    "lint-staged": "^15.5.2",
     "prettier": "^3.3.0"
   }
 }

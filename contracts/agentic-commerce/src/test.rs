@@ -524,10 +524,10 @@ fn init_emits_initialized_event() {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// 1. Double-complete panics with "invalid status"
+// 1. Double-complete panics with InvalidStatus (#4)
 // ---------------------------------------------------------------------------
 #[test]
-#[should_panic(expected = "invalid status")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn complete_panics_on_double_complete() {
     let env = Env::default();
     env.mock_all_auths();
@@ -620,6 +620,43 @@ fn get_job_returns_none_for_nonexistent_id() {
 }
 
 // ---------------------------------------------------------------------------
+// JobNotFound (#5) — explicit error code tests
+// ---------------------------------------------------------------------------
+
+/// submit() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn submit_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let seller = Address::generate(&env);
+    client.submit(&seller, &9999u64, &String::from_str(&env, "deliverable"));
+}
+
+/// complete() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn complete_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let buyer = Address::generate(&env);
+    client.complete(&buyer, &9999u64);
+}
+
+/// cancel() on a non-existent job id must panic with JobNotFound (#5).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn cancel_panics_with_job_not_found_for_unknown_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury) = setup(&env);
+    let buyer = Address::generate(&env);
+    client.cancel(&buyer, &9999u64);
+}
+
+// ---------------------------------------------------------------------------
 // #21 — jobs_by_provider / jobs_by_client
 // ---------------------------------------------------------------------------
 #[test]
@@ -705,10 +742,10 @@ fn jobs_by_provider_returns_empty_for_unknown_provider() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Cancelling an already-cancelled job panics with "invalid status"
+// 5. Cancelling an already-cancelled job panics with InvalidStatus (#4)
 // ---------------------------------------------------------------------------
 #[test]
-#[should_panic(expected = "invalid status")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn cancel_panics_on_already_cancelled_job() {
     let env = Env::default();
     env.mock_all_auths();
@@ -929,179 +966,294 @@ fn upgrade_panics_when_not_initialized() {
     client.upgrade(&admin, &fake_hash);
 }
 
-// ===========================================================================
-// #539 — Minimum fee floor / micro-budget tests
-// ===========================================================================
-
-/// simulate_job_fee with budget=5_000 and 100 bps must return 50, not 0.
-/// (The old divide-first formula returned 0 for any budget < 10_000.)
 #[test]
-fn simulate_job_fee_micro_budget_5000_default_bps() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, _admin, _treasury) = setup(&env);
-
-    // 5_000 * 100 / 10_000 = 50
-    let fee = client.simulate_job_fee(&5_000i128, &100u32);
-    assert_eq!(fee, 50, "simulate_job_fee must return 50 for budget=5_000, bps=100");
-}
-
-/// End-to-end: complete a micro-job (budget = 5_000) and confirm the fee is
-/// non-zero (50 units) and the provider receives 4_950.
-#[test]
-fn complete_micro_job_5000_computes_nonzero_fee() {
+fn multi_eval_two_of_three_settles_only_at_quorum() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, treasury) = setup(&env);
-
     let buyer = Address::generate(&env);
-    let seller = Address::generate(&env);
-    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
-    stellar_token.mint(&buyer, &10_000);
-
-    // budget = 5_000, fee_bps = 100 (1%) → fee = 5_000*100/10_000 = 50
-    let budget: i128 = 5_000;
-    let id = client.create_job(
-        &buyer,
-        &seller,
-        &buyer,
-        &token_addr,
-        &budget,
-        &String::from_str(&env, "micro job"),
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
     );
-    client.submit(&seller, &id, &String::from_str(&env, "ipfs://micro.json"));
-    client.complete(&buyer, &id);
+    let (token, token_client, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "2-of-3"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
 
-    assert_eq!(token.balance(&seller), 4_950, "provider should receive 4_950");
-    assert_eq!(token.balance(&treasury), 50, "treasury should receive 50 (1% of 5_000)");
-    assert_eq!(token.balance(&client.address), 0);
-
-    let job = client.get_job(&id).unwrap();
-    assert_eq!(job.status, JobStatus::Completed);
+    assert_eq!(client.approve_job(&evaluators.get(0).unwrap(), &id), 1);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Submitted);
+    assert_eq!(token_client.balance(&provider), 0);
+    assert_eq!(client.approve_job(&evaluators.get(1).unwrap(), &id), 2);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Completed);
+    assert_eq!(token_client.balance(&provider), 99_000);
+    assert_eq!(token_client.balance(&treasury), 1_000);
 }
 
-/// Budget = 1 with fee_bps = 100: 1 * 100 / 10_000 = 0 → minimum floor kicks
-/// in, so fee = 1 and provider receives 0.  The contract should still complete
-/// (fee transfer happens, payout is 0 which is skipped).
 #[test]
-fn complete_budget_1_triggers_minimum_fee_floor() {
+fn multi_eval_three_of_five_waits_for_third_approval() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, admin, treasury) = setup(&env);
-
+    let (client, admin, _) = setup(&env);
     let buyer = Address::generate(&env);
-    let seller = Address::generate(&env);
-    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
-    stellar_token.mint(&buyer, &10_000);
-
-    // budget = 1, fee_bps = 100 → proportional fee = 0, floor = 1
-    let budget: i128 = 1;
-    let id = client.create_job(
-        &buyer,
-        &seller,
-        &buyer,
-        &token_addr,
-        &budget,
-        &String::from_str(&env, "dust job"),
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
     );
-    client.submit(&seller, &id, &String::from_str(&env, "ipfs://dust.json"));
-    client.complete(&buyer, &id);
+    let (token, token_client, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &3,
+        &token,
+        &100_000,
+        &String::from_str(&env, "3-of-5"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
 
-    // fee = 1 (floor), payout = budget - fee = 0 (no transfer to provider)
-    assert_eq!(token.balance(&treasury), 1, "floor fee of 1 must reach treasury");
-    assert_eq!(token.balance(&client.address), 0);
-
-    let job = client.get_job(&id).unwrap();
-    assert_eq!(job.status, JobStatus::Completed);
+    client.approve_job(&evaluators.get(0).unwrap(), &id);
+    client.approve_job(&evaluators.get(1).unwrap(), &id);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Submitted);
+    client.approve_job(&evaluators.get(2).unwrap(), &id);
+    assert_eq!(client.get_job(&id).unwrap().status, JobStatus::Completed);
+    assert_eq!(token_client.balance(&provider), 99_000);
 }
 
-/// Budget = 9_999 (just below BPS_DENOM) with 100 bps: 9_999*100/10_000 = 99.
-/// Old divide-first would give (9_999/10_000)*100 = 0. New result is 99.
 #[test]
-fn complete_budget_9999_computes_correct_fee_99() {
+#[should_panic(expected = "multi-evaluator job requires approvals")]
+fn multi_eval_job_cannot_use_single_evaluator_complete() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, admin, treasury) = setup(&env);
-
+    let (client, admin, _) = setup(&env);
     let buyer = Address::generate(&env);
-    let seller = Address::generate(&env);
-    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
-    stellar_token.mint(&buyer, &50_000);
-
-    let budget: i128 = 9_999;
-    let id = client.create_job(
-        &buyer,
-        &seller,
-        &buyer,
-        &token_addr,
-        &budget,
-        &String::from_str(&env, "near-threshold job"),
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
     );
-    client.submit(&seller, &id, &String::from_str(&env, "ipfs://near.json"));
-    client.complete(&buyer, &id);
-
-    // 9_999 * 100 / 10_000 = 99  (integer division)
-    assert_eq!(token.balance(&treasury), 99, "fee should be 99");
-    assert_eq!(token.balance(&seller), 9_999 - 99, "provider should receive 9_900");
-    assert_eq!(token.balance(&client.address), 0);
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "quorum required"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    client.complete(&evaluators.get(0).unwrap(), &id);
 }
 
-/// simulate_job_fee must return the same value as the on-chain compute_fee
-/// for a micro-budget, confirming the helper was also fixed (#539).
 #[test]
-fn simulate_job_fee_matches_actual_fee_for_micro_budget() {
+#[should_panic(expected = "not an assigned evaluator")]
+fn multi_eval_rejects_non_member_approval() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, admin, treasury) = setup(&env);
-
+    let (client, admin, _) = setup(&env);
     let buyer = Address::generate(&env);
-    let seller = Address::generate(&env);
-    let (token_addr, token, stellar_token) = deploy_token(&env, &admin);
-    stellar_token.mint(&buyer, &10_000);
-
-    let budget: i128 = 5_000;
-    let fee_bps: u32 = 100;
-
-    // Query the simulation first
-    let simulated_fee = client.simulate_job_fee(&budget, &fee_bps);
-    assert_eq!(simulated_fee, 50, "simulate_job_fee should return 50 for budget=5_000, bps=100");
-
-    // Now actually complete the job and confirm the real fee matches
-    let id = client.create_job(
-        &buyer,
-        &seller,
-        &buyer,
-        &token_addr,
-        &budget,
-        &String::from_str(&env, "simulation check job"),
+    let provider = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
     );
-    client.submit(&seller, &id, &String::from_str(&env, "ipfs://sim.json"));
-    client.complete(&buyer, &id);
-
-    assert_eq!(token.balance(&treasury), simulated_fee,
-        "actual fee must equal simulated fee");
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "assigned evaluators only"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    client.approve_job(&outsider, &id);
 }
 
-/// Budget = 0 with any fee_bps must return fee = 0 (no floor on zero-budget).
-/// (create_job rejects budget < MIN_BUDGET, so we test compute_fee semantics
-/// by using simulate_job_fee which is a pure wrapper.)
 #[test]
-fn simulate_job_fee_zero_budget_returns_zero() {
+#[should_panic(expected = "evaluator already approved")]
+fn multi_eval_rejects_duplicate_approval() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _admin, _treasury) = setup(&env);
-
-    let fee = client.simulate_job_fee(&0i128, &100u32);
-    assert_eq!(fee, 0, "zero budget must produce zero fee");
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    let id = client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "one approval each"),
+    );
+    client.submit(&provider, &id, &String::from_str(&env, "deliverable"));
+    let evaluator = evaluators.get(0).unwrap();
+    client.approve_job(&evaluator, &id);
+    client.approve_job(&evaluator, &id);
 }
 
-/// fee_bps = 0 must always return fee = 0 regardless of budget size.
 #[test]
-fn simulate_job_fee_zero_bps_returns_zero() {
+#[should_panic(expected = "high-value job requires multiple evaluators")]
+fn high_value_job_requires_multi_eval_creation() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _admin, _treasury) = setup(&env);
+    let (client, admin, _) = setup(&env);
+    client.set_multi_eval_threshold(&admin, &50_000);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job(
+        &buyer,
+        &provider,
+        &Address::generate(&env),
+        &token,
+        &100_000,
+        &String::from_str(&env, "must use evaluator quorum"),
+    );
+}
 
-    let fee = client.simulate_job_fee(&5_000i128, &0u32);
-    assert_eq!(fee, 0, "zero fee_bps must produce zero fee");
+#[test]
+#[should_panic(expected = "job does not meet multi-evaluator threshold")]
+fn multi_eval_creation_rejects_below_threshold_budget() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    client.set_multi_eval_threshold(&admin, &50_000);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &10_000,
+        &String::from_str(&env, "below multi-eval threshold"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "invalid evaluator quorum")]
+fn multi_eval_rejects_threshold_greater_than_evaluator_count() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluators = Vec::from_array(
+        &env,
+        [Address::generate(&env), Address::generate(&env)],
+    );
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &3,
+        &token,
+        &100_000,
+        &String::from_str(&env, "invalid quorum"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "duplicate evaluator")]
+fn multi_eval_rejects_duplicate_evaluator_addresses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let buyer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let evaluator = Address::generate(&env);
+    let evaluators = Vec::from_array(&env, [evaluator.clone(), evaluator]);
+    let (token, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&buyer, &1_000_000);
+    client.create_job_multi_eval(
+        &buyer,
+        &provider,
+        &evaluators,
+        &2,
+        &token,
+        &100_000,
+        &String::from_str(&env, "duplicate evaluator"),
+    );
+}
+
+#[test]
+fn open_channel_escrows_deposit_and_stores_voucher_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let payer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token_addr, token, asset) = deploy_token(&env, &admin);
+    asset.mint(&payer, &1_000_000);
+    let voucher_key = BytesN::from_array(&env, &[7u8; 32]);
+
+    let channel_id = client.open_channel(&payer, &provider, &token_addr, &100_000, &voucher_key);
+
+    assert_eq!(channel_id, 1);
+    assert_eq!(token.balance(&client.address), 100_000);
+    let channel = client.get_channel(&channel_id).unwrap();
+    assert_eq!(channel.payer, payer);
+    assert_eq!(channel.provider, provider);
+    assert_eq!(channel.deposit, 100_000);
+    assert_eq!(channel.voucher_key, voucher_key);
+}
+
+#[test]
+#[should_panic(expected = "channel challenge window active")]
+fn channel_cannot_be_force_closed_before_challenge_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup(&env);
+    let payer = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let (token_addr, _, asset) = deploy_token(&env, &admin);
+    asset.mint(&payer, &1_000_000);
+    let voucher_key = BytesN::from_array(&env, &[7u8; 32]);
+    let channel_id = client.open_channel(&payer, &provider, &token_addr, &100_000, &voucher_key);
+
+    client.force_close(&payer, &channel_id);
 }

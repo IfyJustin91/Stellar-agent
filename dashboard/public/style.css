@@ -1115,6 +1115,30 @@ button {
   color: var(--text-muted);
   word-break: break-all;
 }
+.evaluator-progress-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.evaluator-progress-count {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.evaluator-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
+.evaluator-progress-track span {
+  display: block;
+  height: 100%;
+  background: var(--status-completed);
+  transition: width 0.25s var(--ease);
+}
 .job-actions {
   display: flex;
   gap: 8px;

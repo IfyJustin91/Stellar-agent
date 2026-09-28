@@ -4,6 +4,16 @@ export * from "./errors.js";
 export { formatAmount, parseAmount, isValidMetadataUri } from "./format.js";
 export { IdentityClient } from "./identity.js";
 export { CommerceClient } from "./commerce.js";
+export type {
+  ChannelVoucher,
+  EvaluatorProgress,
+  PaymentChannelSession,
+} from "./commerce.js";
+export {
+  channelVoucherPayload,
+  createChannelVoucher,
+  verifyChannelVoucher,
+} from "./paymentChannels.js";
 export * from "./signer.js";
 export { marcPaywall, type MarcPaywallOptions } from "./marcPaywall.js";
 export { marcPaywallFastify, type MarcPaywallFastifyOptions } from "./marcPaywallFastify.js";

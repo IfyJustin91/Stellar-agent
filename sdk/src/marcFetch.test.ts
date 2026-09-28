@@ -16,6 +16,14 @@ test("parsePaymentRequiredHeader extracts amount and asset from a 402 header", (
   assert.equal(parsed.asset, "USDC");
 });
 
+test("parsePaymentRequiredHeader returns empty fields for malformed input", () => {
+  assert.deepEqual(parsePaymentRequiredHeader("not base64"), { amount: "", asset: "" });
+  assert.deepEqual(parsePaymentRequiredHeader(Buffer.from("not json").toString("base64")), {
+    amount: "",
+    asset: "",
+  });
+});
+
 test("marcFetch aborts after the configured timeout", async () => {
   const signer = Keypair.random();
   const fetchImpl = async () => {

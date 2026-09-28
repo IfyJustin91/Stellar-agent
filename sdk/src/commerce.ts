@@ -1,16 +1,32 @@
 import {
   Contract,
-  Keypair,
   nativeToScVal,
   scValToNative,
   Address,
   xdr,
 } from "@stellar/stellar-sdk";
-import type { Job, JobStatus, MarcConfig } from "./types.js";
-import { JobStatusFromNumber } from "./types.js";
+import type { Keypair } from "@stellar/stellar-sdk";
+import type { Job, MarcConfig } from "./types.js";
+import { JobStatusFromNumber } from "./jobStatus.js";
+import type { JobStatus } from "./jobStatus.js";
 import { BaseClient } from "./baseClient.js";
 import type { Signer } from "./signer.js";
 import { signerPublicKey } from "./signer.js";
+import { createChannelVoucher } from "./paymentChannels.js";
+import type { ChannelVoucher } from "./paymentChannels.js";
+
+export type { ChannelVoucher } from "./paymentChannels.js";
+
+export interface PaymentChannelSession {
+  channelId: bigint;
+  createVoucher: (paymentAmount: bigint) => ChannelVoucher;
+}
+
+export interface EvaluatorProgress {
+  evaluators: string[];
+  threshold: number;
+  approvals: number;
+}
 
 const MAX_I128 = (1n << 127n) - 1n;
 
@@ -207,6 +223,156 @@ export class CommerceClient extends BaseClient {
       "commerce",
       options,
     );
+  }
+
+  /** Create a high-value escrow job that requires an evaluator quorum. */
+  async createJobMultiEval(
+    client: Signer,
+    provider: string,
+    evaluators: string[],
+    threshold: number,
+    token: string,
+    budget: bigint,
+    description: string,
+  ): Promise<bigint> {
+    if (budget <= 0n) throw new Error("budget must be greater than 0");
+    if (budget > MAX_I128) throw new Error("budget exceeds i128 max");
+    if (evaluators.length === 0 || evaluators.length > 5) {
+      throw new Error("evaluators must contain between 1 and 5 addresses");
+    }
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > evaluators.length) {
+      throw new Error("threshold must be between 1 and the evaluator count");
+    }
+    if (new Set(evaluators).size !== evaluators.length) {
+      throw new Error("evaluators must be unique");
+    }
+    const evaluatorScVal = xdr.ScVal.scvVec(
+      evaluators.map((address) => new Address(address).toScVal()),
+    );
+    const op = this.contract.call(
+      "create_job_multi_eval",
+      new Address(signerPublicKey(client)).toScVal(),
+      new Address(provider).toScVal(),
+      evaluatorScVal,
+      nativeToScVal(threshold, { type: "u32" }),
+      new Address(token).toScVal(),
+      nativeToScVal(budget, { type: "i128" }),
+      nativeToScVal(description, { type: "string" }),
+    );
+    return await this.invoke(client, op, (value) => BigInt(scValToNative(value) as string), "commerce");
+  }
+
+  /** Submit this evaluator's approval; the contract pays out automatically at quorum. */
+  async approveJob(evaluator: Signer, jobId: bigint): Promise<number> {
+    const op = this.contract.call(
+      "approve_job",
+      new Address(signerPublicKey(evaluator)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    return await this.invoke(evaluator, op, (value) => Number(scValToNative(value)), "commerce");
+  }
+
+  /** Read approval progress for a multi-evaluator job, or null for a regular job. */
+  async getEvaluatorProgress(jobId: bigint): Promise<EvaluatorProgress | null> {
+    const op = this.contract.call("get_evaluator_progress", nativeToScVal(jobId, { type: "u64" }));
+    return await this.simulateOption(op, (value) => {
+      const native = scValToNative(value) as [unknown[], number, number];
+      return {
+        evaluators: native[0].map((address) => String(address)),
+        threshold: Number(native[1]),
+        approvals: Number(native[2]),
+      };
+    });
+  }
+
+  /** Admin: configure the budget threshold that requires evaluator quorum. */
+  async setMultiEvalThreshold(admin: Signer, threshold: bigint): Promise<void> {
+    if (threshold < 0n || threshold > MAX_I128) {
+      throw new Error("threshold must fit in a non-negative i128");
+    }
+    const op = this.contract.call(
+      "set_multi_eval_threshold",
+      new Address(signerPublicKey(admin)).toScVal(),
+      nativeToScVal(threshold, { type: "i128" }),
+    );
+    await this.invoke(admin, op, () => undefined, "commerce");
+  }
+
+  /** Open an escrowed one-way channel; calls to createVoucher are entirely off-chain. */
+  async openChannel(
+    payer: Signer,
+    provider: string,
+    deposit: bigint,
+    voucherKeypair: Keypair,
+    token: string = this.cfg.usdcToken,
+  ): Promise<PaymentChannelSession> {
+    if (deposit <= 0n || deposit > MAX_I128) {
+      throw new Error("deposit must be a positive i128 amount");
+    }
+    const voucherKey = new Uint8Array(voucherKeypair.rawPublicKey());
+    const op = this.contract.call(
+      "open_channel",
+      new Address(signerPublicKey(payer)).toScVal(),
+      new Address(provider).toScVal(),
+      new Address(token).toScVal(),
+      nativeToScVal(deposit, { type: "i128" }),
+      nativeToScVal(voucherKey, { type: "bytes" }),
+    );
+    const channelId = await this.invoke(
+      payer,
+      op,
+      (value) => BigInt(scValToNative(value) as string),
+      "commerce",
+    );
+    let amount = 0n;
+    let nonce = 0n;
+    return {
+      channelId,
+      createVoucher: (paymentAmount) => {
+        if (paymentAmount <= 0n) throw new Error("payment amount must be greater than 0");
+        const nextAmount = amount + paymentAmount;
+        if (nextAmount > deposit) throw new Error("channel deposit exceeded");
+        if (nonce === (1n << 64n) - 1n) throw new Error("channel voucher nonce exhausted");
+        amount = nextAmount;
+        nonce += 1n;
+        return createChannelVoucher(channelId, amount, nonce, voucherKeypair);
+      },
+    };
+  }
+
+  /** Either participant submits the best voucher to begin or update the challenge window. */
+  async closeChannel(
+    channelId: bigint,
+    voucher: ChannelVoucher,
+    participant: Signer,
+  ): Promise<void> {
+    if (voucher.channelId !== channelId) throw new Error("voucher channel ID does not match");
+    const voucherScVal = nativeToScVal(
+      {
+        channel_id: nativeToScVal(voucher.channelId, { type: "u64" }),
+        amount: nativeToScVal(voucher.amount, { type: "i128" }),
+        nonce: nativeToScVal(voucher.nonce, { type: "u64" }),
+      },
+      { type: "map" },
+    );
+    const op = this.contract.call(
+      "close_channel",
+      new Address(signerPublicKey(participant)).toScVal(),
+      nativeToScVal(channelId, { type: "u64" }),
+      voucherScVal,
+      nativeToScVal(voucher.signature, { type: "bytes" }),
+    );
+    await this.invoke(participant, op, () => undefined, "commerce");
+  }
+
+  /** Settle a channel after its 24-hour challenge window has elapsed. */
+  async forceClose(caller: Signer, channelId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "force_close",
+      new Address(signerPublicKey(caller)).toScVal(),
+      nativeToScVal(channelId, { type: "u64" }),
+    );
+    await this.invoke(caller, op, () => undefined, "commerce");
   }
 
   async estimateCreateJobFee(
@@ -449,6 +615,33 @@ export class CommerceClient extends BaseClient {
       nativeToScVal(jobId, { type: "u64" }),
     );
     await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async dispute(client: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "dispute",
+      new Address(signerPublicKey(client)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async claimRefund(client: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "claim_refund",
+      new Address(signerPublicKey(client)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(client, op, () => undefined, "commerce");
+  }
+
+  async claimExpired(provider: Signer, jobId: bigint): Promise<void> {
+    const op = this.contract.call(
+      "claim_expired",
+      new Address(signerPublicKey(provider)).toScVal(),
+      nativeToScVal(jobId, { type: "u64" }),
+    );
+    await this.invoke(provider, op, () => undefined, "commerce");
   }
 
   /**
