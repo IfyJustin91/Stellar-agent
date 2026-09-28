@@ -444,10 +444,32 @@ app.delete("/agents/:id", (req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
+    agent: "registry",
+    version: "1.0.0",
+    uptime: Math.floor(process.uptime()),
     registered: activeAgents.size,
     alive: getAliveAgents().length,
     timeoutSec: HEARTBEAT_TIMEOUT_MS / 1000,
   });
+});
+
+app.get("/metrics", (_req, res) => {
+  const aliveCount = getAliveAgents().length;
+  const uptime = Math.floor(process.uptime());
+  res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  res.send(
+    [
+      `# HELP bear_registry_agents_registered Total registered agents`,
+      `# TYPE bear_registry_agents_registered gauge`,
+      `bear_registry_agents_registered ${activeAgents.size}`,
+      `# HELP bear_registry_agents_alive Currently alive agents`,
+      `# TYPE bear_registry_agents_alive gauge`,
+      `bear_registry_agents_alive ${aliveCount}`,
+      `# HELP bear_uptime_seconds Registry uptime in seconds`,
+      `# TYPE bear_uptime_seconds gauge`,
+      `bear_uptime_seconds ${uptime}`,
+    ].join("\n") + "\n",
+  );
 });
 
 const isDirectExecution =

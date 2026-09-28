@@ -9,7 +9,8 @@
     "demo",
     "landing",
     "agents",
-    "agents/*"
+    "agents/*",
+    "indexer"
   ],
   "scripts": {
     "format": "prettier --write .",

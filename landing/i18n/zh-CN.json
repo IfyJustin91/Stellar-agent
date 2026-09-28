@@ -1,0 +1,116 @@
+{
+  "nav": {
+    "stats": "数据",
+    "protocol": "协议",
+    "how_it_works": "工作原理",
+    "guide": "快速入门",
+    "try_it": "立即体验",
+    "contracts": "合约",
+    "launch_app": "启动应用"
+  },
+  "hero": {
+    "badge": "已上线 Stellar 测试网",
+    "title_line1": "AI 智能体支付",
+    "title_line2": "商业基础层。",
+    "subtitle": "基于 Stellar 的 AI 智能体支付商业层。带有交付保障的托管服务、链上智能体身份，基于 x402 与 MPP 协议，一个协议解决所有问题。",
+    "cta_dashboard": "启动控制台",
+    "cta_get_started": "开始使用",
+    "scroll": "滚动"
+  },
+  "statement": {
+    "title": "Bear 是一个完整的商业基础设施栈，将 x402 微支付、智能体身份和托管合约整合为一个统一协议。",
+    "sub": "基于三个标准（ERC-8004、ERC-8183、x402），Bear 为 AI 智能体在 Stellar 上可信交易提供一切所需。注册、托管、交付、结算。"
+  },
+  "stats": {
+    "eyebrow": "实时数据",
+    "title_line1": "协议",
+    "title_accent": "指标",
+    "desc": "来自 Soroban 测试网合约的实时链上统计数据。",
+    "registered_agents": "已注册智能体总数",
+    "agents_sub": "identity.registered_count()",
+    "escrow_jobs": "托管任务总数",
+    "jobs_sub": "commerce.job_count()",
+    "fee_revenue": "手续费收入",
+    "revenue_sub": "格式化 USDC 交易量"
+  },
+  "protocol": {
+    "eyebrow": "协议",
+    "title_line1": "协议",
+    "title_accent": "栈",
+    "desc": "三层架构协同工作，为 Stellar 上每笔 AI 智能体交易提供信任和交付保障。"
+  },
+  "stack": {
+    "identity": {
+      "title": "智能体身份",
+      "desc": "AI 智能体的链上注册表。每个智能体获得唯一 ID、钱包绑定和元数据 URI。"
+    },
+    "commerce": {
+      "title": "智能体商务",
+      "desc": "托管任务市场。客户锁定资金，提供方交付，评估者审批。平台收取 1% 手续费。"
+    },
+    "x402": {
+      "title": "x402 / MPP",
+      "desc": "通过 Stellar 支付通道的 HTTP 402 微支付。Express 中间件与自动付款的 fetch 客户端。"
+    }
+  },
+  "how": {
+    "eyebrow": "工作原理",
+    "title_line1": "四步完成",
+    "title_accent": "智能体",
+    "title_line2": "商业交易。",
+    "desc": "从注册到结算——智能体间商业交易的完整生命周期。"
+  },
+  "step": {
+    "1": { "title": "注册", "desc": "智能体通过元数据 URI 在身份合约上注册，获得绑定到 Stellar 地址的唯一链上 ID。" },
+    "2": { "title": "托管", "desc": "客户在商务合约上创建任务，将 USDC 锁入托管账户。资金保留至任务完成或取消。" },
+    "3": { "title": "交付", "desc": "提供方提交结果 URI，评估者审查交付内容并决定是否释放付款。" },
+    "4": { "title": "结算", "desc": "托管资金链上释放：99% 给提供方，1% 平台手续费归国库。完全可审计。" }
+  },
+  "guide": {
+    "eyebrow": "快速入门",
+    "title_line1": "几分钟内",
+    "title_accent": "开始使用 Bear。",
+    "desc": "从零到第一个链上智能体任务所需的一切。安装 SDK，开始构建。"
+  },
+  "code": {
+    "install_sdk": "安装 SDK",
+    "register_identity": "注册智能体身份",
+    "create_escrow": "创建托管任务",
+    "monetize_api": "为 API 端点接入支付"
+  },
+  "tryit": {
+    "eyebrow": "Playground",
+    "title_line1": "在浏览器中",
+    "title_accent": "立即体验。",
+    "desc": "直接探索 marc-stellar-sdk——无需安装。Playground 通过 StackBlitz 完全在浏览器中运行。",
+    "notice": "沙盒运行在 Stellar 测试网上，不使用真实资金。",
+    "placeholder_pre": "一个预装了",
+    "placeholder_post": "的交互式 Node.js 环境将在下方加载。",
+    "launch": "启动 Playground"
+  },
+  "contracts": {
+    "eyebrow": "测试网部署",
+    "title_line1": "已上线",
+    "title_accent": "Stellar 测试网。",
+    "desc": "已在 Soroban 上部署并初始化。点击任意地址可复制。",
+    "badge": "Stellar 测试网 — 已上线"
+  },
+  "contract": {
+    "identity_desc": "带有元数据 URI 的 AI 智能体身份链上注册表",
+    "commerce_desc": "具有任务生命周期、交付验证和 99/1 手续费分配的托管引擎",
+    "explorer": "在浏览器中查看 →"
+  },
+  "footer": {
+    "tagline": "AI 智能体支付的商业基础层。",
+    "copy": "为 Stellar Hacks: Agents 2026 构建"
+  },
+  "consent": {
+    "title": "隐私与 Cookie",
+    "description": "我们使用外部字体（Google Fonts）和分析工具来改善您的体验。这些可能在某些地区设置 Cookie。您可以随时更改您的偏好设置。",
+    "reject": "拒绝全部",
+    "accept": "接受全部"
+  },
+  "lang": {
+    "label": "语言"
+  }
+}
